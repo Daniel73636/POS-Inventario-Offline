@@ -1,0 +1,35 @@
+{
+  "name": "pos-inventario",
+  "private": true,
+  "version": "0.1.0",
+  "description": "POS liviano con inventario offline-first (PC + Android)",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "build:packages": "turbo run build --filter=./packages/*",
+    "dev": "turbo run dev --parallel --filter=@pos/api --filter=@pos/pos-web --filter=@pos/web",
+    "dev:api": "pnpm --filter @pos/api dev",
+    "dev:pos": "pnpm --filter @pos/pos-web dev",
+    "dev:web": "pnpm --filter @pos/web dev",
+    "dev:android": "pnpm --filter @pos/pos-android start",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:seed": "pnpm --filter @pos/api seed",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4",
+    "typescript": "~5.8.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "esbuild",
+      "@nestjs/core",
+      "sharp"
+    ]
+  }
+}

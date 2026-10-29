@@ -1,0 +1,16 @@
+node_modules
+dist
+.next
+.turbo
+.expo
+.env
+.env.local
+*.log
+coverage
+apps/api/data
+apps/pos-android/android
+apps/pos-android/ios
+apps/pos-android/dist
+apps/pos-web/dev-dist
+*.tsbuildinfo
+next-env.d.ts

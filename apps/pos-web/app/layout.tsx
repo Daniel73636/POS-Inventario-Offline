@@ -1,15 +1,18 @@
-import type { Metadata } from "next";
-import "./globals.css";
+import type { Metadata, Viewport } from 'next';
+import type { ReactNode } from 'react';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: "POS Caja — MiniMarket",
-  description: "Caja offline-first multiplataforma",
-  manifest: "/manifest.webmanifest",
+  title: 'Caja POS · MiniMarket',
+  description: 'Punto de venta offline-first con inventario',
+  manifest: '/manifest.webmanifest',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export const viewport: Viewport = { themeColor: '#0f766e', width: 'device-width', initialScale: 1 };
+
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="es">
+    <html lang="es" data-theme="light">
       <body>{children}</body>
     </html>
   );

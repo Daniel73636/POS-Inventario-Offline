@@ -1,12 +1,18 @@
 {
   "expo": {
-    "name": "POS Inventario",
-    "slug": "pos-inventario",
-    "version": "1.0.0",
+    "name": "POS MiniMarket",
+    "slug": "pos-minimarket",
+    "version": "0.1.0",
     "orientation": "portrait",
-    "platforms": ["android", "ios", "web"],
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
     "android": {
-      "package": "com.daniel.posinventario"
-    }
+      "package": "com.minimarket.pos",
+      "permissions": ["android.permission.CAMERA", "android.permission.VIBRATE"]
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "La cámara se usa para escanear códigos de barras de los productos." }],
+      "expo-sqlite"
+    ]
   }
 }

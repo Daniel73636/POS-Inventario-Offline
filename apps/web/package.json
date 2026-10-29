@@ -2,20 +2,24 @@
   "name": "@pos/web",
   "version": "0.1.0",
   "private": true,
+  "description": "Panel web del dueño (Next.js)",
   "scripts": {
     "dev": "next dev -p 3004",
     "build": "next build",
-    "start": "next start -p 3004"
+    "start": "next start -p 3004",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "^15.1.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@pos/contracts": "workspace:*",
+    "@pos/domain-pos": "workspace:*",
+    "next": "15.5.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "@types/react": "^19.0.2",
-    "@types/react-dom": "^19.0.2",
+    "@types/node": "^22.15.0",
+    "@types/react": "~19.1.0",
+    "@types/react-dom": "~19.1.0",
     "typescript": "~5.8.3"
   }
 }

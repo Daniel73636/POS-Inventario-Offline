@@ -1,3 +1,6 @@
+# PostgreSQL central opcional. Sin Docker, la API usa PGlite (PostgreSQL embebido) automáticamente.
+#   docker compose up -d postgres
+#   DATABASE_URL=postgres://pos:pos@localhost:5432/pos pnpm dev:api
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,7 +8,15 @@ services:
       POSTGRES_USER: pos
       POSTGRES_PASSWORD: pos
       POSTGRES_DB: pos
-    ports: ["5433:5432"]
-  redis:
-    image: redis:7-alpine
-    ports: ["6380:6379"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - pos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos -d pos"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pos_pgdata:

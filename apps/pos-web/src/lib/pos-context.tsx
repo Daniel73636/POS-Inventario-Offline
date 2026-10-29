@@ -205,8 +205,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ pairingCode, name: deviceName, platform: 'web' }),
       });
       if (!reg.ok) {
-        const body = (await reg.json().catch(() => ({}))) as { title?: string };
-        throw new Error(body.title ?? `Error ${reg.status} al registrar`);
+        const body = (await reg.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? `Error ${reg.status} al registrar`);
       }
       const r = (await reg.json()) as RegisterDeviceResponse;
       const snapRes = await fetch(`${base}/v1/sync/snapshot`, { headers: { authorization: `Bearer ${r.deviceToken}` } });

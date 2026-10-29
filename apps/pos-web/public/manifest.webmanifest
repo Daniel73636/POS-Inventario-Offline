@@ -1,9 +1,9 @@
 {
-  "name": "POS Inventario",
-  "short_name": "POS",
+  "name": "Caja POS MiniMarket",
+  "short_name": "Caja POS",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#10141c",
-  "theme_color": "#22c55e",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
   "lang": "es"
 }

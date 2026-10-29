@@ -1,0 +1,9 @@
+{
+  "name": "POS Inventario",
+  "short_name": "POS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#10141c",
+  "theme_color": "#22c55e",
+  "lang": "es"
+}

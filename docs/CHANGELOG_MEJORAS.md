@@ -35,11 +35,18 @@ Hecha antes de esta entrega. Detalle en `docs/AUDITORIA.md` y `docs/DECISIONES.m
 - **Android.** El indicador distingue sincronizando, error, sin conexión y la hora del último intento. El modo demo ahora carga lotes. `background-sync.ts` describe el `WorkManager` de 15 min; el proceso nativo no está enlazado, así que sólo sincroniza con la app abierta.
 - **Checklist.** `docs/CHECKLIST_LANZAMIENTO.md`.
 
+## Fase 4 — cierre de documentación y 2×1 en caja
+
+- **README** enlaza checklist, changelog, sincronización, facturación DIAN y auditoría.
+- **Checklist** con los pasos manuales: dump antes de la migración 2, `DEMO_MODE=false`, `JWT_SECRET` de 32+ caracteres, código de vinculación de un solo uso y cuentas DIAN fuera del simulador.
+- **`.env.example`** cubre las variables que valida la API. No hay variables de proveedor DIAN: el adaptador sigue siendo el simulador.
+- **2×1 en la caja PC.** El botón 2×1 de la línea activa llama a `quotePromotion` y descuenta las unidades gratis. Sin ese botón el total no cambia. El volumen de `quotePromotion` no se aplica en la venta.
+
 ## Pendiente
 
 - Comandos ESC/POS, cajón monedero y balanza.
 - El conteo físico y los ajustes de inventario no eligen lote.
 - Android no imprime ni hace arqueo. WorkManager sigue sin módulo nativo.
-- `quotePromotion` no está cableado a la venta.
+- El 2×1 de la caja no está en Android ni en un catálogo sincronizado. `quotePromotion` de volumen no entra en la venta.
 - Sesión del dueño no revocable, base local sin cifrar y sin telemetría de errores (Sentry).
 - Una caja ya instalada en modo demo no tiene lotes hasta que se vuelve a configurar.

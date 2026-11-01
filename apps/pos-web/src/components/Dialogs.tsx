@@ -5,7 +5,9 @@ import { formatMoney, parseMoney, PAYMENT_METHOD_LABELS } from '@pos/domain-pos'
 import { normalizeText, type SaleRecord } from '@pos/sync-engine';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePos } from '@/lib/pos-context';
+import { DEMO_MODE } from '@/lib/env';
 import type { ParkedSale } from '@/lib/local-db';
+import { pinErrorMessage } from './Setup';
 
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
@@ -41,15 +43,15 @@ function useAutoFocus<T extends HTMLElement>() {
 
 /** PIN de supervisor para anulaciones y descuentos grandes. */
 export function SupervisorPinDialog({ reason, minRole, onOk, onClose }: { reason: string; minRole: 'supervisor' | 'owner'; onOk: (u: User) => void; onClose: () => void }) {
-  const { verifyPin } = usePos();
+  const { verifyPin, config } = usePos();
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const ref = useAutoFocus<HTMLInputElement>();
   async function submit() {
-    const u = await verifyPin(pin, minRole);
-    if (u) onOk(u);
+    const r = await verifyPin(pin, minRole);
+    if (r.ok) onOk(r.user);
     else {
-      setError('PIN inválido o sin permisos suficientes');
+      setError(r.locked ? pinErrorMessage(r) : `PIN inválido o sin permisos suficientes. Intentos restantes: ${r.attemptsLeft}.`);
       setPin('');
     }
   }
@@ -67,7 +69,7 @@ export function SupervisorPinDialog({ reason, minRole, onOk, onClose }: { reason
         onKeyDown={(e) => e.key === 'Enter' && submit()}
       />
       {error && <div className="error">{error}</div>}
-      <p className="hint">Demo: supervisor Luis 9999 · dueña 0000</p>
+      {DEMO_MODE && config?.mode === 'demo' && <p className="hint">Demo: supervisor Luis 9999 · dueña 0000</p>}
       <button className="primary" onClick={submit}>Autorizar <kbd>Enter</kbd></button>
     </Dialog>
   );

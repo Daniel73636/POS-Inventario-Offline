@@ -32,7 +32,8 @@ export interface PromotionQuote {
 
 /**
  * Elige la promoción de este producto que más descuenta.
- * No está aplicada en el carrito: la venta sigue usando `priceLine` hasta que exista un catálogo de promociones.
+ * En la caja, un 2x1 elegido en la línea entra por `setLinePromotion`.
+ * El precio por volumen de catálogo sigue en `priceLine` y no se vuelve a aplicar aquí.
  */
 export function quotePromotion(productId: string, qty: number, unitPriceCents: Cents, promotions: Promotion[]): PromotionQuote {
   if (!(qty > 0)) throw new Error('La cantidad de la promoción debe ser positiva');

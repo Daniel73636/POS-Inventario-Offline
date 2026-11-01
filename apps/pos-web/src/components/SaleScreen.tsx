@@ -13,6 +13,7 @@ import {
   removeLine,
   saleLotWarnings,
   setCustomer,
+  setLinePromotion,
   setLineQty,
   type Cart,
   type PaymentInput,
@@ -418,6 +419,16 @@ export function SaleScreen() {
           <button disabled={!cart.lines.length} onClick={() => { setQtyMode(true); inputRef.current?.focus(); }}>Cantidad <kbd>F3</kbd></button>
           <button onClick={() => setDialog({ kind: 'customer' })}>Cliente <kbd>F4</kbd></button>
           <button disabled={!cart.lines.length} onClick={() => setDialog({ kind: 'discount' })}>Descuento <kbd>F6</kbd></button>
+          <button
+            disabled={!cart.lines.length}
+            className={cart.lines[active]?.promotion?.kind === 'bogo' ? 'active' : ''}
+            onClick={() => {
+              const line = cart.lines[active];
+              if (!line) return;
+              const on = line.promotion?.kind === 'bogo';
+              setCart((c) => setLinePromotion(c, line.lineId, on ? null : { id: `2x1:${line.productId}`, kind: 'bogo', productId: line.productId, buy: 2, pay: 1 }));
+            }}
+          >2×1</button>
           <button onClick={park}>Suspender <kbd>F9</kbd></button>
           <button onClick={() => setDialog({ kind: 'parked' })}>En espera ({db.getParked().length}) <kbd>F10</kbd></button>
           <button disabled={!cart.lines.length} className="danger" onClick={() => { if (confirm('¿Cancelar la venta en curso?')) setCart(emptyCart()); }}>Cancelar venta</button>
@@ -537,6 +548,7 @@ function CartTable({
               </td>
               <td>
                 {l.name}
+                {l.promotion?.kind === 'bogo' && <span className="tag">2×1</span>}
                 {l.packId && <span className="tag">{l.pricing.packs?.find((p) => p.id === l.packId)?.name}</span>}
                 {l.priceListId !== 'general' && <span className="tag">{l.priceListId}</span>}
               </td>

@@ -49,9 +49,12 @@ async function register(name: string): Promise<RegisterDeviceResponse> {
 }
 
 describe('API de sincronización', () => {
-  it('health', async () => {
+  it('health (liveness) y ready (base + migraciones)', async () => {
     const r = await call('GET', '/health');
-    expect(r.body).toMatchObject({ ok: true, db: 'pglite' });
+    expect(r.body).toMatchObject({ ok: true });
+    const ready = await call('GET', '/ready');
+    expect(ready.status).toBe(200);
+    expect(ready.body).toMatchObject({ ok: true, db: 'pglite', schemaVersion: 2, demoMode: true });
   });
 
   it('rechaza códigos inválidos y peticiones sin credencial', async () => {

@@ -41,11 +41,11 @@ export class ReportsController {
     const [profit] = await this.db.query<Record<string, number>>(
       `SELECT COALESCE(SUM(i.line_total_cents - i.tax_cents),0) AS revenue_cents,
               COALESCE(SUM(ROUND(i.unit_cost_cents * i.qty)),0) AS cost_cents
-       FROM sale_items i JOIN sales s ON s.id = i.sale_id WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}`,
+       FROM sale_items i JOIN sales s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}`,
       p,
     );
     const byMethod = await this.db.query<{ method: string; amount_cents: number }>(
-      `SELECT sp.method, SUM(sp.amount_cents) AS amount_cents FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id
+      `SELECT sp.method, SUM(sp.amount_cents) AS amount_cents FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id AND s.tenant_id = sp.tenant_id
        WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE} GROUP BY sp.method ORDER BY 2 DESC`,
       p,
     );
@@ -56,14 +56,14 @@ export class ReportsController {
     );
     const top = await this.db.query<{ product_id: string; name: string; qty: number; total_cents: number }>(
       `SELECT i.product_id, MAX(i.name) AS name, SUM(i.base_qty) AS qty, SUM(i.line_total_cents) AS total_cents
-       FROM sale_items i JOIN sales s ON s.id = i.sale_id WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}
+       FROM sale_items i JOIN sales s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}
        GROUP BY i.product_id ORDER BY 4 DESC LIMIT 8`,
       p,
     );
     const [inv] = await this.db.query<Record<string, number>>(
       `SELECT COUNT(*) FILTER (WHERE COALESCE(sl.qty,0) < 0)::int AS negative,
               COUNT(*) FILTER (WHERE pr.min_stock IS NOT NULL AND COALESCE(sl.qty,0) <= pr.min_stock)::int AS low
-       FROM products pr LEFT JOIN stock_levels sl ON sl.product_id = pr.id WHERE pr.tenant_id = $1 AND pr.active`,
+       FROM products pr LEFT JOIN stock_levels sl ON sl.product_id = pr.id AND sl.tenant_id = pr.tenant_id WHERE pr.tenant_id = $1 AND pr.active`,
       [p[0]],
     );
     const [alerts] = await this.db.query<{ open: number }>('SELECT COUNT(*)::int AS open FROM alerts WHERE tenant_id = $1 AND resolved_at IS NULL', [p[0]]);
@@ -120,7 +120,7 @@ export class ReportsController {
     const rows = await this.db.query<{ product_id: string; name: string; qty: number; revenue_cents: number; cost_cents: number }>(
       `SELECT i.product_id, MAX(i.name) AS name, SUM(i.base_qty) AS qty,
               SUM(i.line_total_cents - i.tax_cents) AS revenue_cents, SUM(ROUND(i.unit_cost_cents * i.qty)) AS cost_cents
-       FROM sale_items i JOIN sales s ON s.id = i.sale_id
+       FROM sale_items i JOIN sales s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id
        WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}
        GROUP BY i.product_id ORDER BY (SUM(i.line_total_cents - i.tax_cents) - SUM(ROUND(i.unit_cost_cents * i.qty))) DESC`,
       p,
@@ -183,10 +183,10 @@ export class ReportsController {
     const rows = await this.db.query(
       `SELECT cs.id, cs.device_id, d.name AS device_name, u.name AS user_name, cs.opened_at, cs.closed_at, cs.opening_cents,
               cs.counted_cents, cs.expected_cents, cs.difference_cents,
-              (SELECT COALESCE(SUM(sp.amount_cents),0) FROM sale_payments sp JOIN sales s2 ON s2.id = sp.sale_id
-                 WHERE s2.cash_session_id = cs.id AND s2.status = 'completed' AND sp.method = 'cash') AS cash_sales_cents,
-              (SELECT COUNT(*)::int FROM sales s3 WHERE s3.cash_session_id = cs.id) AS sales
-       FROM cash_sessions cs LEFT JOIN devices d ON d.id = cs.device_id LEFT JOIN users u ON u.id = cs.user_id
+              (SELECT COALESCE(SUM(sp.amount_cents),0) FROM sale_payments sp JOIN sales s2 ON s2.id = sp.sale_id AND s2.tenant_id = sp.tenant_id
+                 WHERE s2.tenant_id = cs.tenant_id AND s2.cash_session_id = cs.id AND s2.status = 'completed' AND sp.method = 'cash') AS cash_sales_cents,
+              (SELECT COUNT(*)::int FROM sales s3 WHERE s3.tenant_id = cs.tenant_id AND s3.cash_session_id = cs.id) AS sales
+       FROM cash_sessions cs LEFT JOIN devices d ON d.id = cs.device_id LEFT JOIN users u ON u.id = cs.user_id AND u.tenant_id = cs.tenant_id
        WHERE cs.tenant_id = $1 AND cs.opened_at >= ($2::date)::timestamp AT TIME ZONE $4 AND cs.opened_at < (($3::date + 1))::timestamp AT TIME ZONE $4
        ORDER BY cs.opened_at DESC`,
       p,
@@ -200,9 +200,9 @@ export class ReportsController {
     return this.db.query(
       `SELECT s.id, s.local_number, s.device_id, d.name AS device_name, s.status, s.total_cents, s.tax_cents, s.discount_cents,
               s.occurred_at, c.name AS customer_name,
-              (SELECT string_agg(DISTINCT sp.method, ',') FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
-              (SELECT COUNT(*)::int FROM sale_items i WHERE i.sale_id = s.id) AS items
-       FROM sales s LEFT JOIN devices d ON d.id = s.device_id LEFT JOIN customers c ON c.id = s.customer_id
+              (SELECT string_agg(DISTINCT sp.method, ',') FROM sale_payments sp WHERE sp.tenant_id = s.tenant_id AND sp.sale_id = s.id) AS methods,
+              (SELECT COUNT(*)::int FROM sale_items i WHERE i.tenant_id = s.tenant_id AND i.sale_id = s.id) AS items
+       FROM sales s LEFT JOIN devices d ON d.id = s.device_id LEFT JOIN customers c ON c.id = s.customer_id AND c.tenant_id = s.tenant_id
        WHERE s.tenant_id = $1 AND ${RANGE} ORDER BY s.occurred_at DESC LIMIT 300`,
       p,
     );
@@ -212,7 +212,7 @@ export class ReportsController {
   async alerts(@Req() req: AuthedRequest, @Query('all') all?: string) {
     return this.db.query(
       `SELECT a.id, a.kind, a.product_id, p.name AS product_name, a.message, a.data, a.created_at, a.resolved_at
-       FROM alerts a LEFT JOIN products p ON p.id = a.product_id
+       FROM alerts a LEFT JOIN products p ON p.id = a.product_id AND p.tenant_id = a.tenant_id
        WHERE a.tenant_id = $1 AND ($2::boolean OR a.resolved_at IS NULL) ORDER BY a.created_at DESC LIMIT 200`,
       [req.owner!.tenantId, all === 'true'],
     );

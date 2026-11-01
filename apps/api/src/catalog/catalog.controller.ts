@@ -31,7 +31,7 @@ export class CatalogController {
       `SELECT p.data, p.cost_avg_cents, p.updated_hlc, COALESCE(s.qty, 0) AS stock
        FROM products p LEFT JOIN stock_levels s ON s.product_id = p.id AND s.tenant_id = p.tenant_id
        WHERE p.tenant_id = $1 AND ($2::text IS NULL OR p.name ILIKE '%' || $2 || '%' OR p.sku ILIKE '%' || $2 || '%'
-             OR EXISTS (SELECT 1 FROM barcodes b WHERE b.product_id = p.id AND b.barcode = $2))
+             OR EXISTS (SELECT 1 FROM barcodes b WHERE b.tenant_id = p.tenant_id AND b.product_id = p.id AND b.barcode = $2))
          AND ($3::boolean OR p.active)
        ORDER BY p.category, p.name`,
       [req.owner!.tenantId, q?.trim() || null, includeInactive === 'true'],
@@ -47,7 +47,7 @@ export class CatalogController {
        WHERE tenant_id = $1 AND product_id = $2 ORDER BY occurred_at DESC LIMIT 50`,
       [req.owner!.tenantId, id],
     );
-    const [stock] = await this.db.query<{ qty: number }>('SELECT COALESCE(SUM(qty),0) AS qty FROM stock_movements WHERE product_id = $1', [id]);
+    const [stock] = await this.db.query<{ qty: number }>('SELECT COALESCE(SUM(qty),0) AS qty FROM stock_movements WHERE tenant_id = $1 AND product_id = $2', [req.owner!.tenantId, id]);
     return { ...p, stock: Number(stock?.qty ?? 0), movements };
   }
 
@@ -137,8 +137,8 @@ export class CatalogController {
   async customers(@Req() req: AuthedRequest) {
     const rows = await this.db.query<{ data: Customer; balance: number }>(
       `SELECT c.data,
-              COALESCE((SELECT SUM(sp.amount_cents) FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id
-                        WHERE s.customer_id = c.id AND sp.method = 'credit' AND s.status = 'completed'), 0) AS balance
+              COALESCE((SELECT SUM(sp.amount_cents) FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id AND s.tenant_id = sp.tenant_id
+                        WHERE s.tenant_id = c.tenant_id AND s.customer_id = c.id AND sp.method = 'credit' AND s.status = 'completed'), 0) AS balance
        FROM customers c WHERE c.tenant_id = $1 ORDER BY c.name`,
       [req.owner!.tenantId],
     );

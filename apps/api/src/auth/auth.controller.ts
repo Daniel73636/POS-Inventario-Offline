@@ -3,6 +3,7 @@ import { LoginRequestSchema } from '@pos/contracts';
 import { verifyPassword, type Database } from '@pos/db';
 import { CONFIG, DB, type AppConfig } from '../config';
 import { parseBody, type AuthedRequest } from '../common/http';
+import { RateLimitGuard } from '../common/rate-limit';
 import { OwnerGuard } from './guards';
 import { signToken } from './token';
 
@@ -15,6 +16,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
+  @UseGuards(RateLimitGuard)
   async login(@Body() body: unknown) {
     const { email, password } = parseBody(LoginRequestSchema, body);
     const [owner] = await this.db.query<{ id: string; tenant_id: string; email: string; name: string; password_hash: string }>(

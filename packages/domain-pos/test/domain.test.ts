@@ -26,6 +26,7 @@ import {
   quickCashOptions,
   removeLine,
   setCustomer,
+  setLinePromotion,
   setLineQty,
   splitPayments,
   splitTax,
@@ -362,6 +363,19 @@ describe('quotePromotion', () => {
     const best = quotePromotion('leche', 12, 1000, [bogo, volume]);
     expect(best.promotionId).toBe('dos-por-uno');
     expect(best.discountCents).toBe(6000);
+  });
+
+  it('en el carrito el 2x1 sólo aplica si la línea lo tiene elegido', () => {
+    const plain = addToCart(emptyCart(), gaseosa, 2);
+    expect(computeCartTotals(plain).discountCents).toBe(0);
+    const lineId = plain.lines[0].lineId;
+    const promo = setLinePromotion(plain, lineId, { id: '2x1', kind: 'bogo', productId: 'p-gaseosa', buy: 2, pay: 1 });
+    const t = computeCartTotals(promo);
+    expect(t.discountCents).toBe(350000);
+    expect(t.totalCents).toBe(350000);
+    const single = setLinePromotion(addToCart(emptyCart(), gaseosa, 1), lineId, { id: '2x1', kind: 'bogo', productId: 'p-gaseosa', buy: 2, pay: 1 });
+    expect(computeCartTotals(single).discountCents).toBe(0);
+    expect(setLinePromotion(promo, lineId, null).lines[0].promotion).toBeNull();
   });
 });
 

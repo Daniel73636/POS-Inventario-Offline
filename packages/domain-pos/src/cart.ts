@@ -1,5 +1,6 @@
 import { allocateProportionally, multiplyQty, percentBp, type Cents } from './money';
 import { DEFAULT_PRICE_LIST, priceLine, type PricedProduct } from './pricing';
+import { quotePromotion, type Promotion } from './promotions';
 import { computeTaxes, DEFAULT_TAX_CONFIG, type TaxConfig } from './taxes';
 
 export type Role = 'cashier' | 'supervisor' | 'owner';
@@ -35,6 +36,8 @@ export interface CartLine {
   priceListId: string;
   manualPrice: boolean;
   pricing: PricedProduct;
+  /** 2x1 elegido en la caja. Ausente = ninguna. El precio por volumen sigue en `priceLine`. */
+  promotion?: Promotion | null;
 }
 
 export interface Cart {
@@ -108,6 +111,28 @@ export function setLineQty(cart: Cart, lineId: string, qty: number, now?: Date):
 
 export function removeLine(cart: Cart, lineId: string): Cart {
   return { ...cart, lines: cart.lines.filter((l) => l.lineId !== lineId) };
+}
+
+/** Activa o quita un 2x1 en la línea. Otras promociones no se aplican aquí. */
+export function setLinePromotion(cart: Cart, lineId: string, promotion: Promotion | null): Cart {
+  return {
+    ...cart,
+    lines: cart.lines.map((l) => {
+      if (l.lineId !== lineId) return l;
+      if (!promotion || promotion.kind !== 'bogo' || promotion.productId !== l.productId) return { ...l, promotion: null };
+      return { ...l, promotion };
+    }),
+  };
+}
+
+function bogoDiscount(line: CartLine): Cents {
+  const promo = line.promotion;
+  if (!promo || promo.kind !== 'bogo' || promo.productId !== line.productId) return 0;
+  try {
+    return quotePromotion(line.productId, line.qty, line.unitPriceCents, [promo]).discountCents;
+  } catch {
+    return 0;
+  }
 }
 
 export function setLinePrice(cart: Cart, lineId: string, unitPriceCents: Cents): Cart {
@@ -223,7 +248,9 @@ export interface CartTotals {
 /** Totales del carrito: bruto, descuentos (línea + carrito prorrateado), impuestos y total. */
 export function computeCartTotals(cart: Cart, taxConfig: TaxConfig = DEFAULT_TAX_CONFIG): CartTotals {
   const gross = cart.lines.map(lineGross);
-  const afterLine = cart.lines.map((l, i) => gross[i] - l.discountCents);
+  const promo = cart.lines.map((l, i) => Math.min(bogoDiscount(l), gross[i]));
+  const manual = cart.lines.map((l, i) => Math.min(l.discountCents, gross[i] - promo[i]));
+  const afterLine = gross.map((g, i) => g - manual[i] - promo[i]);
   const cartShare = allocateProportionally(cart.cartDiscountCents, afterLine);
   const net = afterLine.map((v, i) => v - (cartShare[i] ?? 0));
   const taxes = computeTaxes(
@@ -233,7 +260,7 @@ export function computeCartTotals(cart: Cart, taxConfig: TaxConfig = DEFAULT_TAX
   const lines = cart.lines.map((l, i) => ({
     lineId: l.lineId,
     grossCents: gross[i],
-    discountCents: l.discountCents + (cartShare[i] ?? 0),
+    discountCents: manual[i] + promo[i] + (cartShare[i] ?? 0),
     netCents: net[i],
     baseCents: taxes.lines[i].baseCents,
     taxCents: taxes.lines[i].taxCents,

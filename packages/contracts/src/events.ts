@@ -58,6 +58,8 @@ export const payloads = {
     totalCents: cents,
     changeCents: cents,
     fiscalNumber: z.string().nullable().optional(),
+    /** Usuario que autorizó con su PIN un descuento por encima del límite del cajero. */
+    discountAuthorizedBy: z.string().nullable().optional(),
     items: z.array(SaleItemSchema).min(1),
     payments: z.array(SalePaymentSchema),
   }),

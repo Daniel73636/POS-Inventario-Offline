@@ -78,7 +78,7 @@ export const UserSchema = z.object({
   id: z.string(),
   name: z.string(),
   role: RoleSchema,
-  /** sha256(hex) de `${tenantId}:${pin}` para validar PIN sin conexión. */
+  /** PBKDF2 (`pbkdf2$...`, ver pin.ts) o hash antiguo sha256(hex) de `${tenantId}:${pin}`. */
   pinHash: z.string(),
 });
 export type User = z.infer<typeof UserSchema>;

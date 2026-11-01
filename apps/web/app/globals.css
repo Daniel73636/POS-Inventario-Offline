@@ -27,6 +27,8 @@ tr.active td { background: #ccfbf1; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); }
+.empty { padding: 8px 0; }
+.warn { color: var(--warn); }
 .small { font-size: 12px; }
 .ok { color: var(--ok); }
 .neg { color: var(--neg); }

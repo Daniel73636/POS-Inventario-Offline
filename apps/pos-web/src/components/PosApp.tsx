@@ -6,6 +6,7 @@ import { CashScreen, InventoryScreen, SalesScreen, SettingsScreen } from './Back
 import { SaleScreen } from './SaleScreen';
 import { isHelpKey, ShortcutsHelp } from './ShortcutsHelp';
 import { LoginScreen, OpenSessionScreen, SetupScreen } from './Setup';
+import { applyTicketWidth, readTicketWidth } from '@/lib/ticket';
 
 type Tab = 'venta' | 'inventario' | 'caja' | 'ventas' | 'ajustes';
 
@@ -59,6 +60,7 @@ function Shell() {
   useEffect(() => {
     const saved = localStorage.getItem('pos:theme') === 'dark';
     setDark(saved);
+    applyTicketWidth(readTicketWidth());
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';

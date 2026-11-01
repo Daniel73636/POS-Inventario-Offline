@@ -187,11 +187,21 @@ table { border-collapse: collapse; width: 100%; }
 .kpi span { color: var(--muted); font-size: 14px; }
 .kpi strong { font-size: 28px; }
 
-.receipt { font: 13px/1.35 ui-monospace, monospace; }
-.receipt h3 { margin: 4px 0; text-align: center; }
+.receipt { font: 12px/1.35 ui-monospace, monospace; width: 72mm; max-width: 100%; color: var(--text); }
+.receipt.ticket-58 { width: 48mm; font-size: 11px; }
+.receipt.ticket-80 { width: 72mm; }
+.receipt h3 { margin: 4px 0; text-align: center; font-size: 1.15em; }
+.receipt .sep { border-top: 1px dashed currentColor; margin: 6px 0; }
+.receipt .lot { font-size: 0.85em; opacity: 0.8; }
 .r-line { display: flex; justify-content: space-between; gap: 8px; }
-.r-line.total { font-weight: 800; font-size: 15px; }
+.r-line span:first-child { overflow-wrap: anywhere; }
+.r-line.total { font-weight: 800; font-size: 1.15em; }
 .center { text-align: center; }
+.ticket-tools { display: inline-flex; gap: 6px; align-items: center; }
+.ticket-tools button.active, .seg button.active { border-color: var(--accent); font-weight: 700; }
+.expiry-banner { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.expiry-banner ul { margin: 4px 0 0; padding-left: 18px; }
+.denoms { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 
 @media (max-width: 1100px) {
   .quick-grid { grid-template-columns: repeat(4, 1fr); }
@@ -199,7 +209,16 @@ table { border-collapse: collapse; width: 100%; }
 }
 
 @media print {
+  @page { margin: 1mm; }
   body * { visibility: hidden; }
   #receipt, #receipt * { visibility: visible; }
-  #receipt { position: absolute; left: 0; top: 0; width: 72mm; color: #000; }
+  #receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: #000;
+    background: #fff;
+  }
+  html[data-ticket-mm='58'] #receipt { width: 48mm; }
+  html[data-ticket-mm='80'] #receipt { width: 72mm; }
 }

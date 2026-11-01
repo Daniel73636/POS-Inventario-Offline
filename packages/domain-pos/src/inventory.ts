@@ -85,3 +85,59 @@ export function stockLevels(movements: StockMovementLike[]): Record<string, numb
 export function addQty(a: number, b: number): number {
   return (qtyToMilli(a) + qtyToMilli(b)) / QTY_SCALE;
 }
+
+/** Días de aviso antes del vencimiento (incluye el día 7). */
+export const NEAR_EXPIRY_DAYS = 7;
+
+/** Diferencia en días de calendario entre `expiresOn` y `today` (YYYY-MM-DD, UTC). Negativo = vencido. */
+export function daysUntil(expiresOn: string, today: string): number {
+  const ms = Date.parse(`${expiresOn.slice(0, 10)}T00:00:00Z`) - Date.parse(`${today.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return 0;
+  return Math.round(ms / 86_400_000);
+}
+
+export interface AllocatedLot {
+  lotId: string;
+  qty: number;
+  expiresOn: string | null;
+}
+
+export interface SaleLotAllocation {
+  lots: AllocatedLot[];
+  blockedLotIds: string[];
+  shortfall: number;
+}
+
+/**
+ * FEFO de una línea de venta. Si no hay lotes con cantidad, no asigna:
+ * la venta sigue (el stock agregado puede quedar negativo).
+ */
+export function allocateSaleLine(baseQty: number, lots: Lot[], today: string): SaleLotAllocation {
+  if (!(baseQty > 0)) return { lots: [], blockedLotIds: [], shortfall: 0 };
+  const usable = lots.filter((l) => l.qty > 0);
+  if (!usable.length) return { lots: [], blockedLotIds: [], shortfall: baseQty };
+  const result = allocateLots(baseQty, usable, today.slice(0, 10));
+  return {
+    lots: result.allocations.map((a) => ({
+      lotId: a.lotId,
+      qty: a.qty,
+      expiresOn: usable.find((l) => l.id === a.lotId)?.expiresOn ?? null,
+    })),
+    blockedLotIds: result.blockedLotIds,
+    shortfall: result.shortfall,
+  };
+}
+
+/** Avisos en español para el cajero: vencido bloqueado, faltante y lote por vencer. */
+export function saleLotWarnings(name: string, allocation: SaleLotAllocation, today: string): string[] {
+  const warnings: string[] = [];
+  if (allocation.blockedLotIds.length) {
+    warnings.push(`"${name}": lote vencido bloqueado (${allocation.blockedLotIds.join(', ')}).`);
+  }
+  if (allocation.shortfall > 0) {
+    warnings.push(`"${name}": faltan ${allocation.shortfall} en lotes vigentes; el stock quedará negativo.`);
+  }
+  const soon = allocation.lots.find((l) => l.expiresOn && daysUntil(l.expiresOn, today) <= NEAR_EXPIRY_DAYS);
+  if (soon?.expiresOn) warnings.push(`"${name}" sale de un lote que vence el ${soon.expiresOn}.`);
+  return warnings;
+}

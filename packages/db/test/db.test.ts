@@ -83,5 +83,9 @@ describe('base central', () => {
     for (const [pid, qty] of Object.entries(replay.stock)) {
       expect(fromSnapshot.stock[pid] ?? 0).toBeCloseTo(qty, 6);
     }
+    for (const lot of snap.lots ?? []) {
+      const row = Object.values(replay.lots).find((l) => l.productId === lot.productId && l.id === lot.lotId);
+      expect(row?.qty ?? 0).toBeCloseTo(lot.qty, 4);
+    }
   });
 });

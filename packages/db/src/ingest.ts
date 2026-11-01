@@ -142,6 +142,14 @@ export async function buildSnapshot(db: Database, tenantId: string, storeId: str
       'SELECT product_id, qty FROM stock_levels WHERE tenant_id = $1 AND store_id = $2',
       [tenantId, storeId],
     );
+    const lots = await q.query<{ product_id: string; lot_code: string; qty: number; expires_on: string | Date | null }>(
+      `SELECT product_id, lot_code, SUM(qty) AS qty, MAX(expires_on) AS expires_on
+       FROM stock_movements
+       WHERE tenant_id = $1 AND store_id = $2 AND lot_code IS NOT NULL
+       GROUP BY product_id, lot_code
+       HAVING SUM(qty) <> 0`,
+      [tenantId, storeId],
+    );
     return {
       tenant: { id: tenant.id, name: tenant.name },
       store: { id: store?.id ?? storeId, name: store?.name ?? storeId },
@@ -150,6 +158,12 @@ export async function buildSnapshot(db: Database, tenantId: string, storeId: str
       customers: customers.map((c) => c.data),
       users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, pinHash: u.pin_hash })),
       stock: stock.map((s) => ({ productId: s.product_id, qty: Number(s.qty) })),
+      lots: lots.map((l) => ({
+        productId: l.product_id,
+        lotId: l.lot_code,
+        qty: Number(l.qty),
+        expiresOn: l.expires_on instanceof Date ? l.expires_on.toISOString().slice(0, 10) : l.expires_on ? String(l.expires_on).slice(0, 10) : null,
+      })),
       cursor: Number(tenant.server_seq),
       serverTime: new Date().toISOString(),
     };

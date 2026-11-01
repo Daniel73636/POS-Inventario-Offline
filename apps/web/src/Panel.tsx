@@ -17,26 +17,46 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'alertas', label: 'Alertas' },
 ];
 
-function useData<T>(path: string, deps: unknown[] = []): { data: T | null; error: string | null; reload: () => void } {
+function useData<T>(path: string, deps: unknown[] = []): { data: T | null; error: string | null; loading: boolean; reload: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [n, setN] = useState(0);
   useEffect(() => {
     let alive = true;
+    setLoading(true);
+    setError(null);
     api<T>(path)
-      .then((d) => alive && (setData(d), setError(null)))
-      .catch((e: Error) => alive && setError(e.message));
+      .then((d) => {
+        if (!alive) return;
+        setData(d);
+        setError(null);
+      })
+      .catch((e: Error) => {
+        if (!alive) return;
+        setError(e.message);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, n, ...deps]);
-  return { data, error, reload: useCallback(() => setN((x) => x + 1), []) };
+  return { data, error, loading, reload: useCallback(() => setN((x) => x + 1), []) };
 }
 
-function State({ error, loading }: { error: string | null; loading: boolean }) {
-  if (error) return <p className="error">{error}</p>;
+function State({ error, loading, empty, emptyText = 'No hay datos para mostrar.', onRetry }: { error: string | null; loading: boolean; empty?: boolean; emptyText?: string; onRetry?: () => void }) {
   if (loading) return <p className="muted">Cargando…</p>;
+  if (error) {
+    return (
+      <p className="error">
+        {error} {onRetry && <button onClick={onRetry}>Reintentar</button>}
+      </p>
+    );
+  }
+  if (empty) return <p className="muted empty">{emptyText}</p>;
   return null;
 }
 
@@ -105,6 +125,7 @@ interface InventoryReport {
   items: Array<{ productId: string; name: string; category: string; qty: number; minStock: number | null; costAvgCents: number; priceCents: number; costValueCents: number; status: 'ok' | 'low' | 'negative' }>;
   costValueCents: number;
   retailValueCents: number;
+  expiring?: Array<{ productId: string; name: string; lotCode: string | null; expiresOn: string; qty: number; daysLeft: number }>;
 }
 interface SaleRow {
   id: string;
@@ -137,7 +158,8 @@ function Dashboard() {
         <label>Hasta <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
         <button onClick={() => { dash.reload(); sales.reload(); profit.reload(); inv.reload(); recent.reload(); }}>Actualizar</button>
       </div>
-      <State error={dash.error} loading={!d} />
+      <State error={dash.error} loading={dash.loading && !d} onRetry={dash.reload} />
+      {dash.loading && d && <p className="muted small">Actualizando…</p>}
       {d && (
         <div className="kpis">
           <Kpi label="Ventas" value={d.sales} />
@@ -162,7 +184,9 @@ function Dashboard() {
                 <strong>{formatMoney(x.totalCents)}</strong>
               </div>
             ))}
-            {sales.data?.days.length === 0 && <p className="muted">Sin ventas en el rango.</p>}
+            {sales.loading && !sales.data && <p className="muted">Cargando…</p>}
+            {sales.error && <State error={sales.error} loading={false} onRetry={sales.reload} />}
+            {!sales.loading && sales.data?.days.length === 0 && <p className="muted">Sin ventas en el rango.</p>}
           </div>
           <h3>Por medio de pago</h3>
           <table>
@@ -178,6 +202,9 @@ function Dashboard() {
           <table>
             <thead><tr><th>Producto</th><th className="num">Unid.</th><th className="num">Ingreso</th><th className="num">Utilidad</th></tr></thead>
             <tbody>
+              {profit.loading && !profit.data && <tr><td colSpan={4} className="muted">Cargando…</td></tr>}
+              {profit.error && <tr><td colSpan={4}><State error={profit.error} loading={false} onRetry={profit.reload} /></td></tr>}
+              {!profit.loading && profit.data?.products.length === 0 && <tr><td colSpan={4} className="muted">Sin utilidad en el rango.</td></tr>}
               {profit.data?.products.slice(0, 10).map((p) => (
                 <tr key={p.productId}>
                   <td>{p.name}{p.belowCost && <span className="tag neg">bajo costo</span>}</td>
@@ -195,6 +222,9 @@ function Dashboard() {
         <table>
           <thead><tr><th>#</th><th>Fecha</th><th>Caja</th><th>Cliente</th><th>Pago</th><th>Estado</th><th className="num">Total</th></tr></thead>
           <tbody>
+            {recent.loading && !recent.data && <tr><td colSpan={7} className="muted">Cargando…</td></tr>}
+            {recent.error && <tr><td colSpan={7}><State error={recent.error} loading={false} onRetry={recent.reload} /></td></tr>}
+            {!recent.loading && recent.data?.length === 0 && <tr><td colSpan={7} className="muted">Sin ventas en el rango.</td></tr>}
             {recent.data?.slice(0, 30).map((s) => (
               <tr key={s.id}>
                 <td>{s.local_number}</td>
@@ -216,7 +246,7 @@ function Dashboard() {
 type ProductRow = Product & { stock: number };
 
 function Products() {
-  const { data, error, reload } = useData<ProductRow[]>('/v1/products');
+  const { data, error, loading, reload } = useData<ProductRow[]>('/v1/products');
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<ProductRow | null>(null);
   const [price, setPrice] = useState('');
@@ -267,7 +297,7 @@ function Products() {
     <div className="cols wide-left">
       <section className="card">
         <div className="toolbar"><input placeholder="Buscar por nombre, código o categoría" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-        <State error={error} loading={!data} />
+        <State error={error} loading={loading && !data} empty={!!data && rows.length === 0} onRetry={reload} />
         <table>
           <thead><tr><th>Producto</th><th>Código</th><th>Impuesto</th><th className="num">Costo prom.</th><th className="num">Precio</th><th className="num">Stock</th><th /></tr></thead>
           <tbody>
@@ -310,14 +340,14 @@ function Products() {
 }
 
 function Inventory() {
-  const { data, error } = useData<InventoryReport>('/v1/reports/inventory');
+  const { data, error, loading, reload } = useData<InventoryReport>('/v1/reports/inventory');
   const label = { ok: 'OK', low: 'Bajo mínimo', negative: 'Negativo' } as const;
   const low = data?.items.filter((i) => i.status === 'low').length ?? 0;
   const negative = data?.items.filter((i) => i.status === 'negative').length ?? 0;
   return (
     <section className="card">
-      <State error={error} loading={!data} />
-      {data && (
+      <State error={error} loading={loading && !data} empty={!!data && data.items.length === 0} onRetry={reload} />
+      {data && data.items.length > 0 && (
         <>
           <div className="kpis">
             <Kpi label="Valor a costo" value={formatMoney(data.costValueCents)} />
@@ -338,6 +368,25 @@ function Inventory() {
               ))}
             </tbody>
           </table>
+          {(data.expiring?.length ?? 0) > 0 && (
+            <>
+              <h3>Por vencer (7 días) o vencido</h3>
+              <table>
+                <thead><tr><th>Producto</th><th>Lote</th><th className="num">Cantidad</th><th>Vence</th><th className="num">Días</th></tr></thead>
+                <tbody>
+                  {data.expiring!.map((l) => (
+                    <tr key={`${l.productId}:${l.lotCode}:${l.expiresOn}`}>
+                      <td>{l.name}</td>
+                      <td>{l.lotCode ?? '—'}</td>
+                      <td className="num">{l.qty}</td>
+                      <td>{l.expiresOn}</td>
+                      <td className={`num ${l.daysLeft < 0 ? 'neg' : 'warn'}`}>{l.daysLeft}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
         </>
       )}
     </section>
@@ -345,10 +394,10 @@ function Inventory() {
 }
 
 function Customers() {
-  const { data, error } = useData<Array<{ id: string; name: string; docId: string | null; phone: string | null; priceListId: string | null; creditLimitCents: number | null; creditBalanceCents: number }>>('/v1/customers');
+  const { data, error, loading, reload } = useData<Array<{ id: string; name: string; docId: string | null; phone: string | null; priceListId: string | null; creditLimitCents: number | null; creditBalanceCents: number }>>('/v1/customers');
   return (
     <section className="card">
-      <State error={error} loading={!data} />
+      <State error={error} loading={loading && !data} empty={!!data && data.length === 0} onRetry={reload} />
       <table>
         <thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Lista</th><th className="num">Cupo</th><th className="num">Ventas a crédito</th></tr></thead>
         <tbody>
@@ -362,13 +411,13 @@ function Customers() {
 }
 
 function Cash() {
-  const { data, error } = useData<{ sessions: Array<{ id: string; opened_at: string; closed_at: string | null; opening_cents: number; counted_cents: number | null; expected_cents: number | null; difference_cents: number | null; device_name: string; user_name: string; cash_sales_cents: number; sales: number }> }>(
+  const { data, error, loading, reload } = useData<{ sessions: Array<{ id: string; opened_at: string; closed_at: string | null; opening_cents: number; counted_cents: number | null; expected_cents: number | null; difference_cents: number | null; device_name: string; user_name: string; cash_sales_cents: number; sales: number }> }>(
     `/v1/reports/cash?from=${isoDay(-30)}&to=${isoDay()}`,
   );
   return (
     <section className="card">
-      <p className="muted">Últimos 30 días. El cierre es por dispositivo y turno; las cajas desconectadas se consolidan al sincronizar.</p>
-      <State error={error} loading={!data} />
+      <p className="muted">Últimos 30 días. El cierre es por dispositivo y turno; las cajas desconectadas se consolidan al sincronizar. En la caja el esperado queda oculto hasta el conteo.</p>
+      <State error={error} loading={loading && !data} empty={!!data && data.sessions.length === 0} onRetry={reload} />
       <table>
         <thead><tr><th>Apertura</th><th>Cierre</th><th>Caja</th><th>Cajero</th><th className="num">Base</th><th className="num">Ventas</th><th className="num">Efectivo vendido</th><th className="num">Esperado</th><th className="num">Contado</th><th className="num">Diferencia</th></tr></thead>
         <tbody>
@@ -392,7 +441,7 @@ function Cash() {
 }
 
 function Devices() {
-  const { data, error, reload } = useData<Array<{ id: string; name: string; platform: string; last_seq: number; events: number; created_at: string; last_seen_at: string | null; revoked_at: string | null }>>('/v1/devices');
+  const { data, error, loading, reload } = useData<Array<{ id: string; name: string; platform: string; last_seq: number; events: number; created_at: string; last_seen_at: string | null; revoked_at: string | null }>>('/v1/devices');
   const [code, setCode] = useState<string | null>(null);
   async function newCode() {
     const r = await api<{ code: string }>('/v1/devices/pairing-codes', { method: 'POST', body: { uses: 1 } });
@@ -410,7 +459,7 @@ function Devices() {
         {code && <span>Código de un solo uso (24 h): <code className="big">{code}</code></span>}
         <span className="muted">Código demo reutilizable: DEMO-2026</span>
       </div>
-      <State error={error} loading={!data} />
+      <State error={error} loading={loading && !data} empty={!!data && data.length === 0} onRetry={reload} />
       <table>
         <thead><tr><th>Nombre</th><th>Plataforma</th><th className="num">Eventos</th><th className="num">Último seq</th><th>Última conexión</th><th>Estado</th><th /></tr></thead>
         <tbody>
@@ -432,13 +481,14 @@ function Devices() {
 }
 
 function Alerts() {
-  const { data, error, reload } = useData<Array<{ id: string; kind: string; message: string; created_at: string }>>('/v1/alerts');
+  const { data, error, loading, reload } = useData<Array<{ id: string; kind: string; message: string; created_at: string }>>('/v1/alerts');
   const kinds: Record<string, string> = {
     negative_stock: 'Stock negativo',
     price_diff: 'Diferencia de precio',
     barcode_conflict: 'Código duplicado',
     sale_voided: 'Anulación',
     cash_difference: 'Diferencia de caja',
+    near_expiry: 'Por vencer',
   };
   async function resolve(id: string) {
     await api(`/v1/alerts/${id}/resolve`, { method: 'POST' });
@@ -446,8 +496,7 @@ function Alerts() {
   }
   return (
     <section className="card">
-      <State error={error} loading={!data} />
-      {data?.length === 0 && <p className="muted">Sin alertas pendientes.</p>}
+      <State error={error} loading={loading && !data} empty={!!data && data.length === 0} emptyText="Sin alertas pendientes." onRetry={reload} />
       <table>
         <tbody>
           {data?.map((a) => (

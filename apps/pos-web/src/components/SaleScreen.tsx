@@ -3,6 +3,7 @@
 import { UNIT_LABELS, type Product, type User } from '@pos/contracts';
 import {
   addToCart,
+  allocateSaleLine,
   applyDiscount,
   computeCartTotals,
   emptyCart,
@@ -10,12 +11,14 @@ import {
   formatMoney,
   lineGross,
   removeLine,
+  saleLotWarnings,
   setCustomer,
   setLineQty,
   type Cart,
   type PaymentInput,
 } from '@pos/domain-pos';
-import { findByBarcode, searchProducts, uuidv7, type ProductState, type SaleRecord } from '@pos/sync-engine';
+import { findByBarcode, listNearExpiry, productLots, searchProducts, uuidv7, type ProductState, type SaleRecord } from '@pos/sync-engine';
+import { applyTicketWidth, printTicket, readTicketWidth, type TicketWidth } from '@/lib/ticket';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePos } from '@/lib/pos-context';
 import { sounds } from '@/lib/sound';
@@ -49,10 +52,12 @@ export function SaleScreen() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [lastSale, setLastSale] = useState<SaleRecord | null>(null);
   const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
+  const [ticketMm, setTicketMm] = useState<TicketWidth>(80);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Venta en curso persistida: tras un corte se recupera la venta en espera.
   useEffect(() => db.setDraft(cart), [cart, db]);
+  useEffect(() => setTicketMm(readTicketWidth()), []);
   useEffect(() => {
     if (!dialog) inputRef.current?.focus();
   }, [dialog, cart]);
@@ -83,14 +88,22 @@ export function SaleScreen() {
       const units = packId ? (product.packs.find((p) => p.id === packId)?.unitsPerPack ?? 1) * qty : qty;
       const inCart = cart.lines.filter((l) => l.productId === product.id).reduce((s, l) => s + l.qty, 0);
       const stock = state.stock[product.id] ?? 0;
+      const today = new Date().toISOString().slice(0, 10);
+      const soon = listNearExpiry(state, today).filter((l) => l.productId === product.id);
       if (stock - inCart - units < 0) {
         sounds.stock();
         toast(`Stock insuficiente de "${product.name}" (${stock}). Se permite vender; quedará negativo.`, 'warn');
+      } else if (soon.some((l) => l.daysLeft < 0)) {
+        sounds.stock();
+        toast(`"${product.name}" tiene lote vencido bloqueado. Se vende del lote vigente.`, 'warn');
+      } else if (soon.length) {
+        sounds.ok();
+        toast(`"${product.name}" vence el ${soon[0].expiresOn}.`, 'warn');
       } else {
         sounds.ok();
       }
     },
-    [cart.lines, state.stock, toast],
+    [cart.lines, state, toast],
   );
 
   function submitInput() {
@@ -207,11 +220,25 @@ export function SaleScreen() {
       toast(result.errors[0], 'error');
       return;
     }
+    const today = new Date().toISOString().slice(0, 10);
+    const lotWarnings: string[] = [];
+    const items = result.sale.items.map((item) => {
+      const product = state.products[item.productId];
+      if (!product?.tracksLots) return item;
+      const known = productLots(state, item.productId);
+      if (!known.some((l) => l.qty > 0)) {
+        lotWarnings.push(`"${item.name}" controla lotes pero no hay existencias por lote.`);
+        return item;
+      }
+      const alloc = allocateSaleLine(item.baseQty, known, today);
+      lotWarnings.push(...saleLotWarnings(item.name, alloc, today));
+      return alloc.lots.length ? { ...item, lots: alloc.lots } : item;
+    });
     const saleId = uuidv7();
     const localNumber = db.meta.saleNumber + 1;
     emit(
       'SaleCompleted',
-      { saleId, localNumber, cashSessionId: sessionId, userId: user.id, fiscalNumber: null, discountAuthorizedBy: result.sale.discountCents > 0 ? discountAuthorizedBy : null, ...result.sale },
+      { saleId, localNumber, cashSessionId: sessionId, userId: user.id, fiscalNumber: null, discountAuthorizedBy: result.sale.discountCents > 0 ? discountAuthorizedBy : null, ...result.sale, items },
       { saleNumber: localNumber },
     );
     sounds.paid();
@@ -223,6 +250,7 @@ export function SaleScreen() {
     toast(
       result.sale.changeCents > 0 ? `Venta #${localNumber} · Cambio ${formatMoney(result.sale.changeCents)}` : `Venta #${localNumber} registrada`,
     );
+    if (lotWarnings.length) toast(lotWarnings[0], 'warn');
   }
 
   // Atajos de teclado globales de la pantalla de venta.
@@ -304,10 +332,23 @@ export function SaleScreen() {
   }, [dialog, cart.lines.length, results.length, park, changeQty, deleteActive]);
 
   const quick = Object.values(state.products).filter((p) => p.quick && p.active).slice(0, 16);
+  const expiring = useMemo(() => listNearExpiry(state, new Date().toISOString().slice(0, 10)), [state, version]);
 
   return (
     <div className="sale">
       <section className="sale-left">
+        {expiring.length > 0 && (
+          <div className="expiry-banner" role="status">
+            <strong>Por vencer o vencido ({expiring.length})</strong>
+            <ul>
+              {expiring.slice(0, 4).map((l) => (
+                <li key={`${l.productId}:${l.lotId}`}>
+                  {l.productName} · lote {l.lotId} · {l.qty} und · {l.daysLeft < 0 ? `venció ${l.expiresOn}` : `vence ${l.expiresOn}`}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="scan-wrap">
           <input
             ref={inputRef}
@@ -385,9 +426,13 @@ export function SaleScreen() {
           <div className="last-sale">
             <div className="row">
               <span>Última venta #{lastSale.localNumber}</span>
-              <button onClick={() => window.print()}>🖨 Reimprimir</button>
+              <span className="ticket-tools">
+                <button className={ticketMm === 58 ? 'active' : ''} onClick={() => { setTicketMm(58); applyTicketWidth(58); }}>58 mm</button>
+                <button className={ticketMm === 80 ? 'active' : ''} onClick={() => { setTicketMm(80); applyTicketWidth(80); }}>80 mm</button>
+                <button onClick={() => printTicket(ticketMm)}>Imprimir</button>
+              </span>
             </div>
-            <Receipt sale={lastSale} storeName={config?.storeName ?? ''} cashier={user?.name ?? ''} />
+            <Receipt sale={lastSale} storeName={config?.storeName ?? ''} cashier={user?.name ?? ''} width={ticketMm} />
           </div>
         )}
       </aside>

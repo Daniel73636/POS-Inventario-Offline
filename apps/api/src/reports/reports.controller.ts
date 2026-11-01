@@ -170,10 +170,29 @@ export class ReportsController {
         active: r.active,
       };
     });
+    const expiring = await this.db.query<{ product_id: string; name: string; lot_code: string | null; expires_on: string | Date; qty: number; days_left: number }>(
+      `SELECT sm.product_id, pr.name, sm.lot_code, sm.expires_on::text AS expires_on, SUM(sm.qty) AS qty,
+              (sm.expires_on - CURRENT_DATE) AS days_left
+       FROM stock_movements sm
+       JOIN products pr ON pr.tenant_id = sm.tenant_id AND pr.id = sm.product_id
+       WHERE sm.tenant_id = $1 AND sm.expires_on IS NOT NULL
+       GROUP BY sm.product_id, pr.name, sm.lot_code, sm.expires_on
+       HAVING SUM(sm.qty) > 0 AND sm.expires_on <= (CURRENT_DATE + 7)
+       ORDER BY sm.expires_on, pr.name`,
+      [req.owner!.tenantId],
+    );
     return {
       items,
       costValueCents: items.reduce((s, i) => s + i.costValueCents, 0),
       retailValueCents: items.reduce((s, i) => s + i.retailValueCents, 0),
+      expiring: expiring.map((r) => ({
+        productId: r.product_id,
+        name: r.name,
+        lotCode: r.lot_code,
+        expiresOn: String(r.expires_on).slice(0, 10),
+        qty: Number(r.qty),
+        daysLeft: Number(r.days_left),
+      })),
     };
   }
 

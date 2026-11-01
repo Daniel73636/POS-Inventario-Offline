@@ -226,20 +226,24 @@ export function CreateProductDialog({ barcode, onCreate, onClose }: { barcode: s
   );
 }
 
-export function Receipt({ sale, storeName, cashier }: { sale: SaleRecord; storeName: string; cashier: string }) {
+export function Receipt({ sale, storeName, cashier, width }: { sale: SaleRecord; storeName: string; cashier: string; width: 58 | 80 }) {
   return (
-    <div className="receipt" id="receipt">
+    <div className={`receipt ticket-${width}`} id="receipt">
       <h3>{storeName}</h3>
-      <p>Venta #{sale.localNumber} · {new Date(sale.occurredAt).toLocaleString('es-CO')}</p>
+      <p className="center">Venta #{sale.localNumber}</p>
+      <p className="center">{new Date(sale.occurredAt).toLocaleString('es-CO')}</p>
       <p>Cajero: {cashier}</p>
-      <hr />
+      <div className="sep" />
       {sale.items.map((it, i) => (
-        <div key={i} className="r-line">
-          <span>{it.qty} × {it.name}</span>
-          <span>{formatMoney(it.lineTotalCents)}</span>
+        <div key={i}>
+          <div className="r-line">
+            <span>{it.qty} × {it.name}</span>
+            <span>{formatMoney(it.lineTotalCents)}</span>
+          </div>
+          {it.lots?.length ? <div className="lot">Lote {it.lots.map((l) => l.lotId).join(', ')}</div> : null}
         </div>
       ))}
-      <hr />
+      <div className="sep" />
       {sale.discountCents > 0 && <div className="r-line"><span>Descuento</span><span>-{formatMoney(sale.discountCents)}</span></div>}
       <div className="r-line"><span>Impuestos incluidos</span><span>{formatMoney(sale.taxCents)}</span></div>
       <div className="r-line total"><span>TOTAL</span><span>{formatMoney(sale.totalCents)}</span></div>
@@ -247,8 +251,8 @@ export function Receipt({ sale, storeName, cashier }: { sale: SaleRecord; storeN
         <div key={i} className="r-line"><span>{PAYMENT_METHOD_LABELS[p.method]}</span><span>{formatMoney(p.amountCents)}</span></div>
       ))}
       {sale.changeCents > 0 && <div className="r-line"><span>Cambio</span><span>{formatMoney(sale.changeCents)}</span></div>}
-      <hr />
-      <p className="center">Documento interno — sin validez fiscal (demo)</p>
+      <div className="sep" />
+      <p className="center">Documento interno — sin validez fiscal</p>
     </div>
   );
 }

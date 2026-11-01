@@ -232,6 +232,9 @@ function PosProviderReady({ db, children }: { db: LocalDb; children: ReactNode }
       products,
       customers: DEMO_CUSTOMERS,
       stock: rows.map((r) => ({ productId: r.product.id, qty: r.initialStock })),
+      lots: rows
+        .filter((r) => r.expiresOn && r.product.tracksLots)
+        .map((r) => ({ productId: r.product.id, lotId: `L-${r.product.sku}`, qty: r.initialStock, expiresOn: r.expiresOn })),
     });
     const users: User[] = await Promise.all(
       DEMO_USERS.map(async (u) => ({ id: u.id, name: u.name, role: u.role, pinHash: await hashPinPbkdf2(DEMO_TENANT.id, u.pin) })),

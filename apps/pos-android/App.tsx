@@ -3,16 +3,18 @@ import {
   addToCart,
   computeCartTotals,
   emptyCart,
+  allocateSaleLine,
   finalizeSale,
   formatMoney,
   parseMoney,
   PAYMENT_METHOD_LABELS,
   profitOfSale,
+  saleLotWarnings,
   setLineQty,
   type Cart,
   type PaymentMethod,
 } from '@pos/domain-pos';
-import { findByBarcode, searchProducts, uuidv7, type ProductState } from '@pos/sync-engine';
+import { findByBarcode, productLots, searchProducts, uuidv7, type ProductState } from '@pos/sync-engine';
 import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -121,10 +123,25 @@ function SaleScreen() {
             }
             const sessionId = s.currentSessionId();
             const localNumber = s.nextSaleNumber();
-            s.emit('SaleCompleted', { saleId: uuidv7(), localNumber, cashSessionId: sessionId, userId: s.config?.userId ?? 'usr_movil', fiscalNumber: null, ...r.sale });
+            const today = new Date().toISOString().slice(0, 10);
+            const warnings: string[] = [];
+            const items = r.sale.items.map((item) => {
+              const product = s.state.products[item.productId];
+              if (!product?.tracksLots) return item;
+              const known = productLots(s.state, item.productId);
+              if (!known.some((l) => l.qty > 0)) {
+                warnings.push(`"${item.name}" controla lotes pero no hay existencias por lote.`);
+                return item;
+              }
+              const alloc = allocateSaleLine(item.baseQty, known, today);
+              warnings.push(...saleLotWarnings(item.name, alloc, today));
+              return alloc.lots.length ? { ...item, lots: alloc.lots } : item;
+            });
+            s.emit('SaleCompleted', { saleId: uuidv7(), localNumber, cashSessionId: sessionId, userId: s.config?.userId ?? 'usr_movil', fiscalNumber: null, ...r.sale, items });
             setPaying(false);
             setCart(emptyCart());
-            Alert.alert(`Venta #${localNumber}`, r.sale.changeCents ? `Cambio: ${formatMoney(r.sale.changeCents)}` : 'Registrada');
+            const headline = r.sale.changeCents ? `Cambio: ${formatMoney(r.sale.changeCents)}` : 'Registrada';
+            Alert.alert(`Venta #${localNumber}`, warnings.length ? `${headline}\n${warnings.join('\n')}` : headline);
           }}
         />
       )}

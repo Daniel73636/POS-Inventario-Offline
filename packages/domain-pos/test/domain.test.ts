@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   addToCart,
   allocateLots,
+  allocateSaleLine,
+  daysUntil,
+  saleLotWarnings,
   allocateProportionally,
   applyDiscount,
   averageCost,
@@ -155,6 +158,22 @@ describe('allocateLots (FEFO)', () => {
     expect(r.allocations.map((a) => a.lotId)).toEqual(['b', 'a', 'd']);
     expect(r.shortfall).toBe(5);
     expect(r.blockedLotIds).toEqual(['c']);
+  });
+
+  it('la venta avisa lote vencido, faltante y próximo a vencer', () => {
+    expect(daysUntil('2026-11-08', '2026-11-01')).toBe(7);
+    expect(daysUntil('2026-10-01', '2026-11-01')).toBe(-31);
+    const alloc = allocateSaleLine(8, lots, '2026-11-01');
+    expect(alloc.blockedLotIds).toEqual(['c']);
+    expect(alloc.lots.map((l) => l.lotId)).toEqual(['b']);
+    expect(alloc.shortfall).toBe(0);
+    const warnings = saleLotWarnings('Leche', alloc, '2026-11-01');
+    expect(warnings.some((w) => w.includes('vencido'))).toBe(true);
+    const soon = allocateSaleLine(1, lots, '2026-11-10');
+    expect(saleLotWarnings('Leche', soon, '2026-11-10').some((w) => w.includes('2026-11-15'))).toBe(true);
+    const empty = allocateSaleLine(2, [], '2026-11-01');
+    expect(empty.lots).toEqual([]);
+    expect(empty.shortfall).toBe(2);
   });
 });
 

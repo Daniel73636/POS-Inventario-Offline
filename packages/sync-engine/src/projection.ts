@@ -1,5 +1,5 @@
 import type { Customer, PosEvent, Product, SaleItem, SnapshotResponse } from '@pos/contracts';
-import { addQty, averageCost, type Cents, type PaymentMethod } from '@pos/domain-pos';
+import { addQty, allocateSaleLine, averageCost, daysUntil, NEAR_EXPIRY_DAYS, type Cents, type Lot, type PaymentMethod } from '@pos/domain-pos';
 
 export interface ProductState extends Product {
   updatedHlc: string;
@@ -44,12 +44,30 @@ export interface StockAlert {
   at: string;
 }
 
+export interface LotBalance {
+  id: string;
+  productId: string;
+  qty: number;
+  expiresOn: string | null;
+}
+
+export interface ExpiryAlert {
+  productId: string;
+  productName: string;
+  lotId: string;
+  qty: number;
+  expiresOn: string;
+  daysLeft: number;
+}
+
 /** Estado derivado de eventos. Se puede reconstruir desde cero en cualquier momento. */
 export interface PosState {
   products: Record<string, ProductState>;
   barcodeIndex: Record<string, { productId: string; packId: string | null }>;
   customers: Record<string, Customer & { updatedHlc: string }>;
   stock: Record<string, number>;
+  /** Saldos por lote. Clave `${productId}\\0${lotId}`. */
+  lots: Record<string, LotBalance>;
   sales: Record<string, SaleRecord>;
   cashSessions: Record<string, CashSessionRecord>;
   alerts: StockAlert[];
@@ -58,17 +76,87 @@ export interface PosState {
 }
 
 export function emptyState(): PosState {
-  return { products: {}, barcodeIndex: {}, customers: {}, stock: {}, sales: {}, cashSessions: {}, alerts: [], applied: {} };
+  return { products: {}, barcodeIndex: {}, customers: {}, stock: {}, lots: {}, sales: {}, cashSessions: {}, alerts: [], applied: {} };
+}
+
+function lotKey(productId: string, lotId: string): string {
+  return `${productId}\u0000${lotId}`;
+}
+
+/** Estados guardados antes de la fase 2 no traen `lots`. */
+export function ensureLots(state: PosState): void {
+  if (!state.lots) state.lots = {};
+}
+
+export function productLots(state: PosState, productId: string): Lot[] {
+  ensureLots(state);
+  return Object.values(state.lots)
+    .filter((l) => l.productId === productId)
+    .map((l) => ({ id: l.id, qty: l.qty, expiresOn: l.expiresOn }));
+}
+
+export function listNearExpiry(state: PosState, today: string, withinDays = NEAR_EXPIRY_DAYS): ExpiryAlert[] {
+  ensureLots(state);
+  const out: ExpiryAlert[] = [];
+  for (const lot of Object.values(state.lots)) {
+    if (!(lot.qty > 0) || !lot.expiresOn) continue;
+    const daysLeft = daysUntil(lot.expiresOn, today);
+    if (daysLeft > withinDays) continue;
+    out.push({
+      productId: lot.productId,
+      productName: state.products[lot.productId]?.name ?? lot.productId,
+      lotId: lot.id,
+      qty: lot.qty,
+      expiresOn: lot.expiresOn,
+      daysLeft,
+    });
+  }
+  return out.sort((a, b) => a.daysLeft - b.daysLeft || a.productName.localeCompare(b.productName, 'es'));
+}
+
+function adjustLot(state: PosState, productId: string, lotId: string, delta: number, expiresOn?: string | null): void {
+  ensureLots(state);
+  const key = lotKey(productId, lotId);
+  const cur = state.lots[key];
+  state.lots[key] = {
+    id: lotId,
+    productId,
+    qty: addQty(cur?.qty ?? 0, delta),
+    expiresOn: expiresOn ?? cur?.expiresOn ?? null,
+  };
+}
+
+function applyItemLots(state: PosState, item: SaleItem, today: string): SaleItem {
+  if (item.lots?.length) {
+    for (const lot of item.lots) adjustLot(state, item.productId, lot.lotId, -lot.qty, lot.expiresOn ?? null);
+    return item;
+  }
+  const product = state.products[item.productId];
+  if (!product?.tracksLots) return item;
+  const known = productLots(state, item.productId);
+  if (!known.some((l) => l.qty > 0)) return item;
+  const alloc = allocateSaleLine(item.baseQty, known, today);
+  for (const lot of alloc.lots) adjustLot(state, item.productId, lot.lotId, -lot.qty, lot.expiresOn);
+  return alloc.lots.length ? { ...item, lots: alloc.lots } : item;
 }
 
 const SNAPSHOT_HLC = '000000000000000:00000:snapshot';
 
 /** Estado inicial a partir del snapshot del servidor. */
-export function stateFromSnapshot(snapshot: Pick<SnapshotResponse, 'products' | 'customers' | 'stock'>): PosState {
+export function stateFromSnapshot(snapshot: Pick<SnapshotResponse, 'products' | 'customers' | 'stock' | 'lots'>): PosState {
   const state = emptyState();
   for (const p of snapshot.products) upsertProduct(state, p, (p as Partial<ProductState>).updatedHlc ?? SNAPSHOT_HLC);
   for (const c of snapshot.customers) state.customers[c.id] = { ...c, updatedHlc: SNAPSHOT_HLC };
   for (const s of snapshot.stock) state.stock[s.productId] = s.qty;
+  for (const lot of snapshot.lots ?? []) {
+    if (!lot.lotId || lot.qty === 0) continue;
+    state.lots[lotKey(lot.productId, lot.lotId)] = {
+      id: lot.lotId,
+      productId: lot.productId,
+      qty: lot.qty,
+      expiresOn: lot.expiresOn ? lot.expiresOn.slice(0, 10) : null,
+    };
+  }
   return state;
 }
 
@@ -100,6 +188,7 @@ function moveStock(state: PosState, productId: string, delta: number, event: Pos
  *  - Ventas, caja: sólo añadir.
  */
 export function applyEvent(state: PosState, event: PosEvent): boolean {
+  ensureLots(state);
   const last = state.applied[event.deviceId] ?? 0;
   if (event.seq <= last) return false;
   state.applied[event.deviceId] = event.seq;
@@ -118,12 +207,14 @@ export function applyEvent(state: PosState, event: PosEvent): boolean {
       break;
     }
     case 'StockReceived': {
-      const { productId, qty, unitCostCents } = event.payload;
+      const { productId, qty, unitCostCents, lotCode, expiresOn } = event.payload;
       const product = state.products[productId];
       if (product) {
         product.costAvgCents = averageCost(state.stock[productId] ?? 0, product.costAvgCents, qty, unitCostCents);
       }
       moveStock(state, productId, qty, event);
+      const lotId = lotCode?.trim() || (expiresOn ? `vence-${expiresOn.slice(0, 10)}` : '');
+      if (lotId) adjustLot(state, productId, lotId, qty, expiresOn ? expiresOn.slice(0, 10) : null);
       break;
     }
     case 'StockAdjusted':
@@ -145,7 +236,7 @@ export function applyEvent(state: PosState, event: PosEvent): boolean {
         taxCents: p.taxCents,
         totalCents: p.totalCents,
         changeCents: p.changeCents,
-        items: p.items,
+        items: p.items.map((item) => applyItemLots(state, item, event.occurredAt.slice(0, 10))),
         payments: p.payments,
         occurredAt: event.occurredAt,
         hlc: event.hlc,
@@ -157,7 +248,10 @@ export function applyEvent(state: PosState, event: PosEvent): boolean {
       const sale = state.sales[event.payload.saleId];
       if (!sale || sale.status === 'voided') break;
       sale.status = 'voided';
-      for (const item of sale.items) moveStock(state, item.productId, item.baseQty, event);
+      for (const item of sale.items) {
+        moveStock(state, item.productId, item.baseQty, event);
+        for (const lot of item.lots ?? []) adjustLot(state, item.productId, lot.lotId, lot.qty, lot.expiresOn ?? null);
+      }
       break;
     }
     case 'CashSessionOpened':

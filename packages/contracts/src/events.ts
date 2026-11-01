@@ -3,6 +3,13 @@ import { cents, CustomerSchema, positiveQty, ProductSchema } from './catalog';
 
 export const PaymentMethodSchema = z.enum(['cash', 'card', 'transfer', 'credit']);
 
+export const SaleLotSchema = z.object({
+  lotId: z.string().min(1),
+  qty: positiveQty,
+  expiresOn: z.string().nullable().optional(),
+});
+export type SaleLot = z.infer<typeof SaleLotSchema>;
+
 export const SaleItemSchema = z.object({
   productId: z.string(),
   name: z.string(),
@@ -16,6 +23,8 @@ export const SaleItemSchema = z.object({
   taxRateBp: z.number().int(),
   taxCents: cents,
   lineTotalCents: cents,
+  /** Lotes consumidos por FEFO. Ausente en ventas anteriores a la fase 2. */
+  lots: z.array(SaleLotSchema).optional(),
 });
 export type SaleItem = z.infer<typeof SaleItemSchema>;
 

@@ -1,11 +1,12 @@
 'use client';
 
 import { EVENT_LABELS, UNIT_LABELS } from '@pos/contracts';
-import { cashExpected, formatMoney, parseMoney, PAYMENT_METHOD_LABELS, profitOfSale } from '@pos/domain-pos';
-import { normalizeText, uuidv7 } from '@pos/sync-engine';
-import { useMemo, useRef, useState } from 'react';
+import { COP_DENOMINATIONS, cashExpected, countDenominations, formatMoney, parseMoney, PAYMENT_METHOD_LABELS, profitOfSale } from '@pos/domain-pos';
+import { listNearExpiry, normalizeText, productLots, uuidv7 } from '@pos/sync-engine';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { SCHEMA_VERSION } from '@/lib/local-db';
 import { usePos } from '@/lib/pos-context';
+import { applyTicketWidth, readTicketWidth, type TicketWidth } from '@/lib/ticket';
 import { SupervisorPinDialog } from './Dialogs';
 
 export function InventoryScreen() {
@@ -15,7 +16,12 @@ export function InventoryScreen() {
   const [qty, setQty] = useState('');
   const [cost, setCost] = useState('');
   const [counted, setCounted] = useState('');
+  const [lotCode, setLotCode] = useState('');
+  const [expiresOn, setExpiresOn] = useState('');
+  const [note, setNote] = useState<string | null>(null);
   const [needPin, setNeedPin] = useState<null | (() => void)>(null);
+  const today = new Date().toISOString().slice(0, 10);
+  const expiring = listNearExpiry(db.state, today);
   const products = Object.values(db.state.products)
     .filter((p) => normalizeText(`${p.name} ${p.barcodes.join(' ')} ${p.category}`).includes(normalizeText(q)))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -25,9 +31,21 @@ export function InventoryScreen() {
     const n = Number(qty.replace(',', '.'));
     const c = parseMoney(cost);
     if (!sel || !user || !(n > 0) || c === null) return;
-    emit('StockReceived', { productId: sel.id, qty: n, unitCostCents: c, userId: user.id, supplier: null });
+    const lot = sel.tracksLots ? (lotCode.trim() || (expiresOn ? `vence-${expiresOn}` : null)) : null;
+    emit('StockReceived', {
+      productId: sel.id,
+      qty: n,
+      unitCostCents: c,
+      userId: user.id,
+      supplier: null,
+      lotCode: lot,
+      expiresOn: sel.tracksLots && expiresOn ? expiresOn : null,
+    });
     setQty('');
     setCost('');
+    setLotCode('');
+    setExpiresOn('');
+    setNote(sel.tracksLots && !expiresOn ? 'Entrada sin fecha de vencimiento: no participa del orden FEFO.' : null);
   }
 
   function count() {
@@ -46,6 +64,16 @@ export function InventoryScreen() {
   return (
     <div className="backoffice">
       <div className="bo-list">
+        {expiring.length > 0 && (
+          <div className="expiry-banner" role="status">
+            <strong>Por vencer o vencido</strong>
+            <ul>
+              {expiring.slice(0, 6).map((l) => (
+                <li key={`${l.productId}:${l.lotId}`}>{l.productName} · {l.lotId} · {l.qty} · {l.daysLeft < 0 ? `venció ${l.expiresOn}` : `vence ${l.expiresOn}`}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         <input className="big-input" placeholder="Buscar producto o código" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
         <table className="grid">
           <thead><tr><th>Producto</th><th>Código</th><th className="num">Precio</th><th className="num">Stock</th></tr></thead>
@@ -72,10 +100,25 @@ export function InventoryScreen() {
           <>
             <h2>{sel.name}</h2>
             <p>Stock actual: <strong>{db.state.stock[sel.id] ?? 0}</strong> · Costo promedio {formatMoney(sel.costAvgCents)}</p>
+            {sel.tracksLots && (
+              <ul className="plain">
+                {productLots(db.state, sel.id).filter((l) => l.qty > 0).map((l) => (
+                  <li key={l.id}>{l.id} · {l.qty} · {l.expiresOn ?? 'sin vencimiento'}</li>
+                ))}
+                {productLots(db.state, sel.id).every((l) => !(l.qty > 0)) && <li className="muted">Sin lotes con existencia.</li>}
+              </ul>
+            )}
             <h3>Entrada de mercancía</h3>
             <label className="field"><span>Cantidad</span><input value={qty} onChange={(e) => setQty(e.target.value)} /></label>
             <label className="field"><span>Costo unitario</span><input value={cost} placeholder={formatMoney(sel.costAvgCents)} onChange={(e) => setCost(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && receive()} /></label>
+            {sel.tracksLots && (
+              <>
+                <label className="field"><span>Código de lote</span><input value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></label>
+                <label className="field"><span>Vencimiento</span><input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} /></label>
+              </>
+            )}
             <button className="primary" onClick={receive}>Registrar entrada</button>
+            {note && <p className="hint">{note}</p>}
             <h3>Conteo físico</h3>
             <label className="field"><span>Cantidad contada</span><input value={counted} onChange={(e) => setCounted(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && count()} /></label>
             <button onClick={count}>Ajustar al conteo (requiere supervisor)</button>
@@ -96,7 +139,9 @@ export function CashScreen() {
   const [kind, setKind] = useState<'in' | 'out'>('out');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
-  const [counted, setCounted] = useState('');
+  const [denoms, setDenoms] = useState<Record<string, string>>({});
+  const [revealed, setRevealed] = useState(false);
+  const [submittedCents, setSubmittedCents] = useState<number | null>(null);
 
   const sales = Object.values(db.state.sales).filter((s) => s.cashSessionId === sessionId && s.status === 'completed');
   const calc = useMemo(
@@ -107,8 +152,9 @@ export function CashScreen() {
         movements: session?.movements ?? [],
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, sales.length],
+    [session, sales.length, revealed],
   );
+  const countedCents = countDenominations(Object.fromEntries(Object.entries(denoms).map(([den, n]) => [den, Number(n) || 0])));
   if (!session || !user) return <p className="muted pad">No hay turno abierto.</p>;
 
   function movement() {
@@ -119,32 +165,61 @@ export function CashScreen() {
     setReason('');
   }
 
+  function submitCount() {
+    setSubmittedCents(countedCents);
+    setRevealed(true);
+  }
+
+  function correctCount() {
+    setRevealed(false);
+    setSubmittedCents(null);
+  }
+
   function close() {
-    const c = parseMoney(counted);
-    if (c === null || !user || !sessionId) return;
-    const diff = c - calc.expectedCents;
-    if (!confirm(`Cerrar turno. Esperado ${formatMoney(calc.expectedCents)}, contado ${formatMoney(c)}, diferencia ${formatMoney(diff)}. ¿Confirmar?`)) return;
-    emit('CashSessionClosed', { sessionId, userId: user.id, countedCents: c, expectedCents: calc.expectedCents, differenceCents: diff }, { sessionId: null });
+    if (submittedCents === null || !revealed || !user || !sessionId) return;
+    const diff = submittedCents - calc.expectedCents;
+    if (!confirm(`Cerrar turno. Esperado ${formatMoney(calc.expectedCents)}, contado ${formatMoney(submittedCents)}, diferencia ${formatMoney(diff)}. ¿Confirmar?`)) return;
+    emit('CashSessionClosed', { sessionId, userId: user.id, countedCents: submittedCents, expectedCents: calc.expectedCents, differenceCents: diff }, { sessionId: null });
     db.setMeta({ sessionId: null });
     logout();
   }
+
+  const diff = submittedCents === null ? 0 : submittedCents - calc.expectedCents;
+  const otherMethods = (Object.entries(calc.byMethod) as Array<[keyof typeof PAYMENT_METHOD_LABELS, number]>).filter(([m]) => m !== 'cash');
 
   return (
     <div className="backoffice">
       <div className="card">
         <h2>Turno actual</h2>
         <p className="muted">Abierto {new Date(session.openedAt).toLocaleString('es-CO')} · {sales.length} ventas</p>
-        <table className="grid">
-          <tbody>
-            <tr><td>Base inicial</td><td className="num">{formatMoney(session.openingCents)}</td></tr>
-            {Object.entries(calc.byMethod).map(([m, v]) => (
-              <tr key={m}><td>Ventas {PAYMENT_METHOD_LABELS[m as keyof typeof PAYMENT_METHOD_LABELS]}</td><td className="num">{formatMoney(v)}</td></tr>
-            ))}
-            <tr><td>Ingresos</td><td className="num">{formatMoney(calc.inCents)}</td></tr>
-            <tr><td>Retiros</td><td className="num">−{formatMoney(calc.outCents)}</td></tr>
-            <tr className="strong"><td>Efectivo esperado</td><td className="num">{formatMoney(calc.expectedCents)}</td></tr>
-          </tbody>
-        </table>
+        {!revealed ? (
+          <>
+            <p className="hint">Arqueo ciego: el efectivo esperado permanece oculto hasta registrar el conteo.</p>
+            <table className="grid">
+              <tbody>
+                {otherMethods.map(([m, v]) => (
+                  <tr key={m}><td>Ventas {PAYMENT_METHOD_LABELS[m]}</td><td className="num">{formatMoney(v)}</td></tr>
+                ))}
+                <tr><td>Ventas en efectivo</td><td className="num">Oculto</td></tr>
+                <tr className="strong"><td>Efectivo esperado</td><td className="num">Oculto</td></tr>
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <table className="grid">
+            <tbody>
+              <tr><td>Base inicial</td><td className="num">{formatMoney(session.openingCents)}</td></tr>
+              {Object.entries(calc.byMethod).map(([m, v]) => (
+                <tr key={m}><td>Ventas {PAYMENT_METHOD_LABELS[m as keyof typeof PAYMENT_METHOD_LABELS]}</td><td className="num">{formatMoney(v)}</td></tr>
+              ))}
+              <tr><td>Ingresos</td><td className="num">{formatMoney(calc.inCents)}</td></tr>
+              <tr><td>Retiros</td><td className="num">−{formatMoney(calc.outCents)}</td></tr>
+              <tr className="strong"><td>Efectivo esperado</td><td className="num">{formatMoney(calc.expectedCents)}</td></tr>
+              <tr><td>Efectivo contado</td><td className="num">{formatMoney(submittedCents ?? 0)}</td></tr>
+              <tr><td>Diferencia</td><td className={`num ${diff === 0 ? 'ok' : 'neg'}`}>{formatMoney(diff)}</td></tr>
+            </tbody>
+          </table>
+        )}
       </div>
       <div className="card">
         <h3>Ingreso / retiro de efectivo</h3>
@@ -157,13 +232,32 @@ export function CashScreen() {
         <button onClick={movement}>Registrar movimiento</button>
         <ul className="plain">
           {session.movements.map((m) => <li key={m.id}>{m.kind === 'in' ? '+' : '−'}{formatMoney(m.amountCents)} · {m.reason}</li>)}
+          {session.movements.length === 0 && <li className="muted">Sin movimientos en el turno.</li>}
         </ul>
-        <h3>Cierre de caja</h3>
-        <label className="field"><span>Efectivo contado</span><input value={counted} onChange={(e) => setCounted(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && close()} /></label>
-        {parseMoney(counted) !== null && (
-          <p>Diferencia: <strong className={(parseMoney(counted) ?? 0) - calc.expectedCents === 0 ? 'ok' : 'neg'}>{formatMoney((parseMoney(counted) ?? 0) - calc.expectedCents)}</strong></p>
+        <h3>Conteo ciego</h3>
+        <p className="hint">Cantidad de cada denominación. El total contado no se compara con el sistema hasta registrarlo.</p>
+        <div className="denoms">
+          {COP_DENOMINATIONS.map((den) => (
+            <label key={den} className="field">
+              <span>{formatMoney(den)}</span>
+              <input
+                inputMode="numeric"
+                disabled={revealed}
+                value={denoms[String(den)] ?? ''}
+                onChange={(e) => setDenoms((d) => ({ ...d, [String(den)]: e.target.value.replace(/\D/g, '') }))}
+              />
+            </label>
+          ))}
+        </div>
+        <p>Total contado: <strong>{formatMoney(revealed ? submittedCents ?? 0 : countedCents)}</strong></p>
+        {!revealed ? (
+          <button className="primary" onClick={submitCount}>Registrar conteo</button>
+        ) : (
+          <div className="row-gap">
+            <button onClick={correctCount}>Corregir conteo</button>
+            <button className="primary" onClick={close}>Confirmar cierre</button>
+          </div>
         )}
-        <button className="primary" onClick={close}>Cerrar turno</button>
       </div>
     </div>
   );
@@ -276,6 +370,8 @@ function BackupCard() {
 export function SettingsScreen() {
   const { db, config, sync, syncNow, resetDevice } = usePos();
   const events = db.allEvents();
+  const [ticketMm, setTicketMm] = useState<TicketWidth>(80);
+  useEffect(() => setTicketMm(readTicketWidth()), []);
   return (
     <div className="backoffice">
       <div className="card">
@@ -295,6 +391,12 @@ export function SettingsScreen() {
         <div className="row-gap">
           <button disabled={config?.mode !== 'server'} onClick={() => syncNow()}>Sincronizar ahora</button>
           <button className="danger" onClick={() => { if (confirm(sync.pending ? `Hay ${sync.pending} eventos sin subir que se perderán. ¿Restablecer?` : '¿Restablecer esta caja?')) void resetDevice(); }}>Restablecer caja</button>
+        </div>
+        <h3>Ticket térmico</h3>
+        <p className="hint">La última venta se imprime por el diálogo del navegador, a 58 mm o 80 mm. No envía comandos ESC/POS ni abre el cajón.</p>
+        <div className="seg">
+          <button className={ticketMm === 58 ? 'active' : ''} onClick={() => { setTicketMm(58); applyTicketWidth(58); }}>58 mm</button>
+          <button className={ticketMm === 80 ? 'active' : ''} onClick={() => { setTicketMm(80); applyTicketWidth(80); }}>80 mm</button>
         </div>
       </div>
       <div className="card">

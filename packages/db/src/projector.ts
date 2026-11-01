@@ -1,5 +1,5 @@
 import type { PosEvent, Product } from '@pos/contracts';
-import { averageCost, priceLine } from '@pos/domain-pos';
+import { averageCost, daysUntil, NEAR_EXPIRY_DAYS, priceLine } from '@pos/domain-pos';
 import { uuidv7 } from '@pos/sync-engine';
 import type { Queryable } from './adapter';
 import { appendAudit } from './audit';
@@ -20,7 +20,7 @@ async function currentStock(q: Queryable, tenantId: string, productId: string): 
 async function insertMovement(
   q: Queryable,
   e: PosEvent,
-  m: { idx: number; productId: string; qty: number; unitCostCents?: number | null; reason: string; refId?: string | null; userId?: string | null; lotCode?: string | null; expiresOn?: string | null },
+  m: { idx: number | string; productId: string; qty: number; unitCostCents?: number | null; reason: string; refId?: string | null; userId?: string | null; lotCode?: string | null; expiresOn?: string | null },
 ): Promise<void> {
   await q.query(
     `INSERT INTO stock_movements (id, tenant_id, store_id, product_id, lot_code, expires_on, qty, unit_cost_cents, reason, ref_id, device_id, user_id, hlc, occurred_at)
@@ -149,6 +149,19 @@ export async function projectEvent(q: Queryable, e: PosEvent): Promise<void> {
         lotCode: p.lotCode,
         expiresOn: p.expiresOn,
       });
+      if (p.expiresOn) {
+        const days = daysUntil(p.expiresOn, e.occurredAt.slice(0, 10));
+        if (days <= NEAR_EXPIRY_DAYS) {
+          const name = await productName(q, t, p.productId);
+          const when = days < 0 ? `venció el ${p.expiresOn.slice(0, 10)}` : `vence el ${p.expiresOn.slice(0, 10)} (${days} días)`;
+          await alert(q, t, 'near_expiry', p.productId, `"${name}" ${when}. Lote ${p.lotCode ?? 'sin código'}.`, {
+            lotCode: p.lotCode ?? null,
+            expiresOn: p.expiresOn.slice(0, 10),
+            qty: p.qty,
+            daysLeft: days,
+          });
+        }
+      }
       return;
     }
 
@@ -206,7 +219,38 @@ export async function projectEvent(q: Queryable, e: PosEvent): Promise<void> {
           [`${s.saleId}:${i}`, t, s.saleId, it.productId, it.name, it.packId, it.qty, it.baseQty, it.unitPriceCents, it.unitCostCents,
             it.discountCents, it.taxRateBp, it.taxCents, it.lineTotalCents],
         );
-        await insertMovement(q, e, { idx: i, productId: it.productId, qty: -it.baseQty, unitCostCents: it.unitCostCents, reason: 'sale', refId: s.saleId, userId: s.userId });
+        const lots = it.lots ?? [];
+        if (!lots.length) {
+          await insertMovement(q, e, { idx: i, productId: it.productId, qty: -it.baseQty, unitCostCents: it.unitCostCents, reason: 'sale', refId: s.saleId, userId: s.userId });
+        } else {
+          let allocatedMilli = 0;
+          for (const [li, lot] of lots.entries()) {
+            allocatedMilli += Math.round(lot.qty * 1000);
+            await insertMovement(q, e, {
+              idx: `${i}:${li}`,
+              productId: it.productId,
+              qty: -lot.qty,
+              unitCostCents: it.unitCostCents,
+              reason: 'sale',
+              refId: s.saleId,
+              userId: s.userId,
+              lotCode: lot.lotId,
+              expiresOn: lot.expiresOn ?? null,
+            });
+          }
+          const shortMilli = Math.round(it.baseQty * 1000) - allocatedMilli;
+          if (shortMilli > 0) {
+            await insertMovement(q, e, {
+              idx: `${i}:faltante`,
+              productId: it.productId,
+              qty: -(shortMilli / 1000),
+              unitCostCents: it.unitCostCents,
+              reason: 'sale',
+              refId: s.saleId,
+              userId: s.userId,
+            });
+          }
+        }
         await checkNegative(q, e, it.productId, it.name);
 
         // Precio cambiado mientras la caja estaba desconectada: se informa, nunca se bloquea.
@@ -247,12 +291,34 @@ export async function projectEvent(q: Queryable, e: PosEvent): Promise<void> {
         [t, e.payload.saleId, e.occurredAt, e.payload.reason],
       );
       if (!updated.length) return;
-      const items = await q.query<{ product_id: string; base_qty: number; unit_cost_cents: number }>(
-        'SELECT product_id, base_qty, unit_cost_cents FROM sale_items WHERE tenant_id = $1 AND sale_id = $2 ORDER BY id',
+      const moves = await q.query<{ product_id: string; lot_code: string | null; expires_on: string | Date | null; qty: number; unit_cost_cents: number | null }>(
+        `SELECT product_id, lot_code, expires_on, qty, unit_cost_cents FROM stock_movements
+         WHERE tenant_id = $1 AND ref_id = $2 AND reason = 'sale' ORDER BY id`,
         [t, e.payload.saleId],
       );
-      for (const [i, it] of items.entries()) {
-        await insertMovement(q, e, { idx: i, productId: it.product_id, qty: Number(it.base_qty), unitCostCents: Number(it.unit_cost_cents), reason: 'return', refId: e.payload.saleId, userId: e.payload.userId });
+      if (moves.length) {
+        for (const [i, it] of moves.entries()) {
+          const exp = it.expires_on instanceof Date ? it.expires_on.toISOString().slice(0, 10) : it.expires_on ? String(it.expires_on).slice(0, 10) : null;
+          await insertMovement(q, e, {
+            idx: i,
+            productId: it.product_id,
+            qty: -Number(it.qty),
+            unitCostCents: it.unit_cost_cents === null ? null : Number(it.unit_cost_cents),
+            reason: 'return',
+            refId: e.payload.saleId,
+            userId: e.payload.userId,
+            lotCode: it.lot_code,
+            expiresOn: exp,
+          });
+        }
+      } else {
+        const items = await q.query<{ product_id: string; base_qty: number; unit_cost_cents: number }>(
+          'SELECT product_id, base_qty, unit_cost_cents FROM sale_items WHERE tenant_id = $1 AND sale_id = $2 ORDER BY id',
+          [t, e.payload.saleId],
+        );
+        for (const [i, it] of items.entries()) {
+          await insertMovement(q, e, { idx: i, productId: it.product_id, qty: Number(it.base_qty), unitCostCents: Number(it.unit_cost_cents), reason: 'return', refId: e.payload.saleId, userId: e.payload.userId });
+        }
       }
       await alert(q, t, 'sale_voided', null, `Venta anulada: ${e.payload.reason}`, { saleId: e.payload.saleId, authorizedBy: e.payload.authorizedBy, userId: e.payload.userId });
       await appendAudit(q, {

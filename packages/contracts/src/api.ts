@@ -54,6 +54,8 @@ export interface SnapshotResponse {
   customers: z.infer<typeof CustomerSchema>[];
   users: z.infer<typeof UserSchema>[];
   stock: Array<{ productId: string; qty: number }>;
+  /** Saldos por lote (FEFO). Ausente en snapshots anteriores a la fase 2. */
+  lots?: Array<{ productId: string; lotId: string; qty: number; expiresOn: string | null }>;
   cursor: number;
   serverTime: string;
 }

@@ -3,7 +3,8 @@
 import { EVENT_LABELS, UNIT_LABELS } from '@pos/contracts';
 import { cashExpected, formatMoney, parseMoney, PAYMENT_METHOD_LABELS, profitOfSale } from '@pos/domain-pos';
 import { normalizeText, uuidv7 } from '@pos/sync-engine';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { SCHEMA_VERSION } from '@/lib/local-db';
 import { usePos } from '@/lib/pos-context';
 import { SupervisorPinDialog } from './Dialogs';
 
@@ -217,6 +218,61 @@ export function SalesScreen() {
   );
 }
 
+function BackupCard() {
+  const { db, sync, restoreBackup } = usePos();
+  const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function exportBackup() {
+    const backup = await db.exportBackup();
+    const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `respaldo-caja-${backup.config?.deviceName ?? 'pos'}-${backup.exportedAt.slice(0, 10)}.json`.replace(/\s+/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+    setMessage({ tone: 'ok', text: `Respaldo descargado (${backup.events.length} eventos).` });
+  }
+
+  async function importBackup(file: File) {
+    try {
+      const data = JSON.parse(await file.text()) as unknown;
+      const warn = sync.pending ? ` Hay ${sync.pending} eventos sin subir en esta caja que se reemplazarán.` : '';
+      if (!confirm(`¿Restaurar el respaldo "${file.name}"? Se reemplazan todos los datos locales.${warn}`)) return;
+      await restoreBackup(data);
+      setMessage({ tone: 'ok', text: 'Respaldo restaurado. Vuelve a iniciar sesión.' });
+    } catch (e) {
+      setMessage({ tone: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Base local y respaldo</h2>
+      <table className="grid">
+        <tbody>
+          <tr><td>Motor</td><td>IndexedDB (esquema v{SCHEMA_VERSION})</td></tr>
+          <tr>
+            <td>Almacenamiento persistente</td>
+            <td>{db.persisted === null ? 'No soportado por el navegador' : db.persisted ? 'Concedido' : <span className="tag neg">No concedido: el navegador podría borrar datos si falta espacio</span>}</td>
+          </tr>
+          {db.writeError && <tr><td>Último error de escritura</td><td className="neg">{db.writeError}</td></tr>}
+        </tbody>
+      </table>
+      <p className="hint">El respaldo incluye la credencial de la caja: guárdalo en un lugar seguro y no lo compartas.</p>
+      <div className="row-gap">
+        <button onClick={() => void exportBackup()}>Descargar respaldo (JSON)</button>
+        <button onClick={() => fileRef.current?.click()}>Restaurar respaldo…</button>
+        <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importBackup(f); }} />
+      </div>
+      {message && <div className={message.tone === 'ok' ? 'ok' : 'error'}>{message.text}</div>}
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const { db, config, sync, syncNow, resetDevice } = usePos();
   const events = db.allEvents();
@@ -238,7 +294,7 @@ export function SettingsScreen() {
         </table>
         <div className="row-gap">
           <button disabled={config?.mode !== 'server'} onClick={() => syncNow()}>Sincronizar ahora</button>
-          <button className="danger" onClick={() => { if (confirm(sync.pending ? `Hay ${sync.pending} eventos sin subir que se perderán. ¿Restablecer?` : '¿Restablecer esta caja?')) resetDevice(); }}>Restablecer caja</button>
+          <button className="danger" onClick={() => { if (confirm(sync.pending ? `Hay ${sync.pending} eventos sin subir que se perderán. ¿Restablecer?` : '¿Restablecer esta caja?')) void resetDevice(); }}>Restablecer caja</button>
         </div>
       </div>
       <div className="card">
@@ -257,6 +313,7 @@ export function SettingsScreen() {
           </tbody>
         </table>
       </div>
+      <BackupCard />
     </div>
   );
 }

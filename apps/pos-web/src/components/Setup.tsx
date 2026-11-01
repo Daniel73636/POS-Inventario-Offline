@@ -4,12 +4,19 @@ import { DEMO_PAIRING_CODE } from '@pos/contracts';
 import { formatMoney, parseMoney } from '@pos/domain-pos';
 import { uuidv7 } from '@pos/sync-engine';
 import { useState } from 'react';
-import { usePos } from '@/lib/pos-context';
+import { DEMO_MODE } from '@/lib/env';
+import { usePos, type PinResult } from '@/lib/pos-context';
+import { formatWait } from '@/lib/pin-lockout';
+
+export function pinErrorMessage(r: Extract<PinResult, { ok: false }>): string {
+  if (r.locked) return `Demasiados intentos. Espera ${formatWait(r.waitMs)} antes de volver a intentar.`;
+  return `PIN incorrecto. Te quedan ${r.attemptsLeft} intento${r.attemptsLeft === 1 ? '' : 's'}.`;
+}
 
 export function SetupScreen() {
   const { setupDemo, setupServer } = usePos();
   const [apiUrl, setApiUrl] = useState(process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000');
-  const [code, setCode] = useState(DEMO_PAIRING_CODE);
+  const [code, setCode] = useState(DEMO_MODE ? DEMO_PAIRING_CODE : '');
   const [name, setName] = useState('Caja 1');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +44,12 @@ export function SetupScreen() {
         <label className="field"><span>Nombre de la caja</span><input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && connect()} /></label>
         {error && <div className="error">{error}</div>}
         <button className="primary" disabled={busy} onClick={connect}>{busy ? 'Conectando…' : 'Registrar caja y descargar catálogo'}</button>
-        <div className="divider">o</div>
-        <button onClick={() => setupDemo()}>Modo demo sin servidor (sólo local)</button>
+        {DEMO_MODE && (
+          <>
+            <div className="divider">o</div>
+            <button onClick={() => setupDemo()}>Modo demo sin servidor (sólo local)</button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -50,9 +61,14 @@ export function LoginScreen() {
   const [userId, setUserId] = useState(users.find((u) => u.role === 'cashier')?.id ?? users[0]?.id ?? '');
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   async function submit() {
-    if (!(await login(userId, pin))) {
-      setError('PIN incorrecto');
+    if (busy) return;
+    setBusy(true);
+    const r = await login(userId, pin);
+    setBusy(false);
+    if (!r.ok) {
+      setError(pinErrorMessage(r));
       setPin('');
     }
   }
@@ -72,8 +88,8 @@ export function LoginScreen() {
           <input autoFocus className="big-input" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => e.key === 'Enter' && submit()} />
         </label>
         {error && <div className="error">{error}</div>}
-        <p className="hint">Demo: Ana 1234 · Luis 9999 · Dueña 0000</p>
-        <button className="primary" onClick={submit}>Entrar <kbd>Enter</kbd></button>
+        {DEMO_MODE && config?.mode === 'demo' && <p className="hint">Demo: Ana 1234 · Luis 9999 · Dueña 0000</p>}
+        <button className="primary" disabled={busy} onClick={submit}>{busy ? 'Verificando…' : 'Entrar'} <kbd>Enter</kbd></button>
       </div>
     </div>
   );

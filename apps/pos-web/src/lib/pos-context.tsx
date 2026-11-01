@@ -7,7 +7,8 @@ import {
   DEMO_TENANT,
   DEMO_USERS,
   demoCatalog,
-  pinHashInput,
+  hashPinPbkdf2,
+  verifyPinHash,
   type EventPayload,
   type EventType,
   type Product,
@@ -24,14 +25,15 @@ import {
   type SyncStatus,
 } from '@pos/sync-engine';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { DEMO_MODE } from './env';
 import { LocalDb, type DeviceConfig } from './local-db';
-
-export async function sha256Hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
-}
+import { lockRemainingMs, MAX_ATTEMPTS, registerFailure, registerSuccess, type LockoutState } from './pin-lockout';
 
 type SyncView = SyncStatus & { mode: 'demo' | 'server' };
+
+export type PinResult =
+  | { ok: true; user: User }
+  | { ok: false; locked: boolean; waitMs: number; attemptsLeft: number };
 
 interface PosContextValue {
   db: LocalDb;
@@ -41,13 +43,14 @@ interface PosContextValue {
   sync: SyncView;
   online: boolean;
   emit: <K extends EventType>(type: K, payload: EventPayload<K>, meta?: { saleNumber?: number; sessionId?: string | null }) => void;
-  login: (userId: string, pin: string) => Promise<boolean>;
+  login: (userId: string, pin: string) => Promise<PinResult>;
   logout: () => void;
-  verifyPin: (pin: string, minRole: 'supervisor' | 'owner') => Promise<User | null>;
+  verifyPin: (pin: string, minRole: 'supervisor' | 'owner') => Promise<PinResult>;
   setupDemo: () => Promise<void>;
   setupServer: (apiUrl: string, pairingCode: string, deviceName: string) => Promise<void>;
   syncNow: () => Promise<void>;
-  resetDevice: () => void;
+  resetDevice: () => Promise<void>;
+  restoreBackup: (file: unknown) => Promise<void>;
 }
 
 const PosContext = createContext<PosContextValue | null>(null);
@@ -56,11 +59,38 @@ const RANK = { cashier: 0, supervisor: 1, owner: 2 } as const;
 
 const IDLE_SYNC: SyncStatus = { state: 'idle', pending: 0, lastSyncAt: null, lastError: null, clockSkewMs: 0, clockWarning: false };
 
+/** Abre IndexedDB (migrando localStorage si hace falta) antes de montar la caja. */
 export function PosProvider({ children }: { children: ReactNode }) {
-  const dbRef = useRef<LocalDb | null>(null);
-  if (!dbRef.current) dbRef.current = new LocalDb();
-  const db = dbRef.current;
+  const [db, setDb] = useState<LocalDb | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    LocalDb.open()
+      .then(async (opened) => {
+        await opened.requestPersistence();
+        if (!cancelled) setDb(opened);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (error) {
+    return (
+      <div className="center-screen">
+        <div className="card setup">
+          <h1>No se pudo abrir la base local</h1>
+          <p className="error">{error}</p>
+          <p className="muted">Revisa que el navegador permita almacenamiento (no uses modo incógnito) y recarga la página.</p>
+        </div>
+      </div>
+    );
+  }
+  if (!db) return <div className="center-screen"><p className="muted">Abriendo base local…</p></div>;
+  return <PosProviderReady db={db}>{children}</PosProviderReady>;
+}
 
+function PosProviderReady({ db, children }: { db: LocalDb; children: ReactNode }) {
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
   const [config, setConfig] = useState<DeviceConfig | null>(() => db.getConfig());
@@ -74,6 +104,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
   const clockRef = useRef<HybridLogicalClock | null>(null);
   const factoryRef = useRef<EventFactory | null>(null);
   const clientRef = useRef<SyncClient | null>(null);
+
+  useEffect(() => db.onWriteError(() => bump()), [db, bump]);
 
   // Reloj, fábrica de eventos y cliente de sincronización por dispositivo.
   useEffect(() => {
@@ -141,17 +173,40 @@ export function PosProvider({ children }: { children: ReactNode }) {
     [db, bump],
   );
 
+  /** Verifica un PIN contra candidatos aplicando el bloqueo por intentos de la clave dada. */
+  const checkPin = useCallback(
+    async (key: string, pin: string, candidates: User[]): Promise<PinResult> => {
+      if (!config) return { ok: false, locked: false, waitMs: 0, attemptsLeft: 0 };
+      const now = Date.now();
+      const lock = db.getSecurity<LockoutState>() ?? {};
+      const wait = lockRemainingMs(lock, key, now);
+      if (wait > 0) return { ok: false, locked: true, waitMs: wait, attemptsLeft: 0 };
+      for (const u of candidates) {
+        if (await verifyPinHash(u.pinHash, config.tenantId, pin)) {
+          db.setSecurity(registerSuccess(lock, key));
+          return { ok: true, user: u };
+        }
+      }
+      const { state, lockedMs } = registerFailure(lock, key, now);
+      db.setSecurity(state);
+      db.appendAudit({ type: lockedMs ? 'pin_locked' : 'pin_failed', userId: key.startsWith('user:') ? key.slice(5) : null, detail: key });
+      return { ok: false, locked: lockedMs > 0, waitMs: lockedMs, attemptsLeft: lockedMs ? 0 : MAX_ATTEMPTS - (state[key]?.failures ?? 0) };
+    },
+    [db, config],
+  );
+
   const login = useCallback(
     async (userId: string, pin: string) => {
       const u = db.getUsers().find((x) => x.id === userId);
-      if (!u || !config) return false;
-      const hash = await sha256Hex(pinHashInput(config.tenantId, pin));
-      if (hash !== u.pinHash) return false;
-      window.sessionStorage.setItem('pos:user', JSON.stringify(u));
-      setUser(u);
-      return true;
+      const r = await checkPin(`user:${userId}`, pin, u ? [u] : []);
+      if (r.ok) {
+        window.sessionStorage.setItem('pos:user', JSON.stringify(r.user));
+        setUser(r.user);
+        db.appendAudit({ type: 'login', userId: r.user.id, detail: '' });
+      }
+      return r;
     },
-    [db, config],
+    [db, checkPin],
   );
 
   const logout = useCallback(() => {
@@ -161,15 +216,16 @@ export function PosProvider({ children }: { children: ReactNode }) {
 
   const verifyPin = useCallback(
     async (pin: string, minRole: 'supervisor' | 'owner') => {
-      if (!config) return null;
-      const hash = await sha256Hex(pinHashInput(config.tenantId, pin));
-      const u = db.getUsers().find((x) => x.pinHash === hash);
-      return u && RANK[u.role] >= RANK[minRole] ? u : null;
+      const candidates = db.getUsers().filter((u) => RANK[u.role] >= RANK[minRole]);
+      const r = await checkPin('supervisor', pin, candidates);
+      if (r.ok) db.appendAudit({ type: 'supervisor_authorized', userId: r.user.id, detail: `rol mínimo ${minRole}` });
+      return r;
     },
-    [db, config],
+    [db, checkPin],
   );
 
   const setupDemo = useCallback(async () => {
+    if (!DEMO_MODE) throw new Error('El modo demo está deshabilitado en esta instalación');
     const rows = demoCatalog();
     const products: Product[] = rows.map((r) => r.product);
     const state = stateFromSnapshot({
@@ -178,7 +234,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
       stock: rows.map((r) => ({ productId: r.product.id, qty: r.initialStock })),
     });
     const users: User[] = await Promise.all(
-      DEMO_USERS.map(async (u) => ({ id: u.id, name: u.name, role: u.role, pinHash: await sha256Hex(pinHashInput(DEMO_TENANT.id, u.pin)) })),
+      DEMO_USERS.map(async (u) => ({ id: u.id, name: u.name, role: u.role, pinHash: await hashPinPbkdf2(DEMO_TENANT.id, u.pin) })),
     );
     const cfg: DeviceConfig = {
       mode: 'demo',
@@ -191,7 +247,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
       storeId: DEMO_STORE.id,
       storeName: DEMO_STORE.name,
     };
-    db.bootstrap(cfg, state, 0, users, DEMO_PRICE_LISTS);
+    await db.bootstrap(cfg, state, 0, users, DEMO_PRICE_LISTS);
     setConfig(cfg);
     bump();
   }, [db, bump]);
@@ -223,7 +279,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
         storeId: r.storeId,
         storeName: r.storeName,
       };
-      db.bootstrap(cfg, stateFromSnapshot(snap), snap.cursor, snap.users, snap.priceLists);
+      await db.bootstrap(cfg, stateFromSnapshot(snap), snap.cursor, snap.users, snap.priceLists);
       setConfig(cfg);
       bump();
     },
@@ -235,15 +291,27 @@ export function PosProvider({ children }: { children: ReactNode }) {
     bump();
   }, [bump]);
 
-  const resetDevice = useCallback(() => {
+  const resetDevice = useCallback(async () => {
     clientRef.current?.stop();
-    db.reset();
+    await db.reset();
     window.sessionStorage.removeItem('pos:user');
     setUser(null);
     setConfig(null);
     setSyncStatus(IDLE_SYNC);
     bump();
   }, [db, bump]);
+
+  const restoreBackup = useCallback(
+    async (file: unknown) => {
+      clientRef.current?.stop();
+      await db.importBackup(file);
+      window.sessionStorage.removeItem('pos:user');
+      setUser(null);
+      setConfig(db.getConfig());
+      bump();
+    },
+    [db, bump],
+  );
 
   const value = useMemo<PosContextValue>(
     () => ({
@@ -261,8 +329,9 @@ export function PosProvider({ children }: { children: ReactNode }) {
       setupServer,
       syncNow,
       resetDevice,
+      restoreBackup,
     }),
-    [db, version, config, user, syncStatus, online, emit, login, logout, verifyPin, setupDemo, setupServer, syncNow, resetDevice],
+    [db, version, config, user, syncStatus, online, emit, login, logout, verifyPin, setupDemo, setupServer, syncNow, resetDevice, restoreBackup],
   );
 
   return <PosContext.Provider value={value}>{children}</PosContext.Provider>;

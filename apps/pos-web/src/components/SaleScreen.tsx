@@ -1,6 +1,6 @@
 'use client';
 
-import { UNIT_LABELS, type Product } from '@pos/contracts';
+import { UNIT_LABELS, type Product, type User } from '@pos/contracts';
 import {
   addToCart,
   applyDiscount,
@@ -14,7 +14,6 @@ import {
   setLineQty,
   type Cart,
   type PaymentInput,
-  type Role,
 } from '@pos/domain-pos';
 import { findByBarcode, searchProducts, uuidv7, type ProductState, type SaleRecord } from '@pos/sync-engine';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,7 +29,7 @@ type DialogState =
   | { kind: 'discount' }
   | { kind: 'parked' }
   | { kind: 'create'; barcode: string }
-  | { kind: 'pin'; reason: string; minRole: 'supervisor' | 'owner'; onOk: (role: Role) => void };
+  | { kind: 'pin'; reason: string; minRole: 'supervisor' | 'owner'; onOk: (authorizer: User) => void };
 
 interface Toast {
   id: number;
@@ -49,6 +48,7 @@ export function SaleScreen() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [lastSale, setLastSale] = useState<SaleRecord | null>(null);
+  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Venta en curso persistida: tras un corte se recupera la venta en espera.
@@ -169,6 +169,7 @@ export function SaleScreen() {
     const r = applyDiscount(cart, full, user.role);
     if (r.ok) {
       setCart(r.cart);
+      setDiscountAuthorizedBy(null);
       setDialog(null);
       toast(r.discountCents ? `Descuento ${formatMoney(r.discountCents)} aplicado` : 'Descuento retirado');
       return;
@@ -179,10 +180,11 @@ export function SaleScreen() {
         kind: 'pin',
         reason: `Descuento de ${formatMoney(r.discountCents)} supera tu límite. Requiere ${minRole === 'owner' ? 'dueña' : 'supervisor'}.`,
         minRole,
-        onOk: (role) => {
-          const again = applyDiscount(cart, full, role);
+        onOk: (authorizer) => {
+          const again = applyDiscount(cart, full, authorizer.role);
           if (again.ok) {
             setCart(again.cart);
+            setDiscountAuthorizedBy(again.discountCents ? authorizer.id : null);
             toast(`Descuento autorizado: ${formatMoney(again.discountCents)}`);
           }
           setDialog(null);
@@ -209,12 +211,13 @@ export function SaleScreen() {
     const localNumber = db.meta.saleNumber + 1;
     emit(
       'SaleCompleted',
-      { saleId, localNumber, cashSessionId: sessionId, userId: user.id, fiscalNumber: null, ...result.sale },
+      { saleId, localNumber, cashSessionId: sessionId, userId: user.id, fiscalNumber: null, discountAuthorizedBy: result.sale.discountCents > 0 ? discountAuthorizedBy : null, ...result.sale },
       { saleNumber: localNumber },
     );
     sounds.paid();
     setLastSale(db.state.sales[saleId] ?? null);
     setCart(emptyCart());
+    setDiscountAuthorizedBy(null);
     setActive(0);
     setDialog(null);
     toast(
@@ -225,7 +228,7 @@ export function SaleScreen() {
   // Atajos de teclado globales de la pantalla de venta.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (dialog) return;
+      if (dialog || document.querySelector('[role="dialog"]')) return;
       const inputEmpty = !inputRef.current?.value;
       switch (e.key) {
         case 'F2':
@@ -442,7 +445,7 @@ export function SaleScreen() {
         />
       )}
       {dialog?.kind === 'pin' && (
-        <SupervisorPinDialog reason={dialog.reason} minRole={dialog.minRole} onOk={(u) => dialog.onOk(u.role)} onClose={() => setDialog(null)} />
+        <SupervisorPinDialog reason={dialog.reason} minRole={dialog.minRole} onOk={(u) => dialog.onOk(u)} onClose={() => setDialog(null)} />
       )}
     </div>
   );

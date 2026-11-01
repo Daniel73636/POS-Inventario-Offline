@@ -62,4 +62,20 @@ code.big { font-size: 20px; font-weight: 700; letter-spacing: 0.1em; }
 .bars { display: grid; gap: 6px; }
 .bar-row { display: grid; grid-template-columns: 50px 1fr 120px; gap: 8px; align-items: center; }
 .bar { height: 18px; background: var(--accent); border-radius: 4px; min-width: 2px; }
-@media (max-width: 900px) { .cols, .cols.wide-left, .layout { grid-template-columns: 1fr; } }
+.hour-grid { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; align-items: end; height: 96px; margin: 8px 0 4px; }
+.hour { display: grid; grid-template-rows: 1fr auto; align-items: end; height: 100%; min-width: 0; }
+.hour-bar { background: var(--accent); border-radius: 2px 2px 0 0; width: 100%; }
+.hour span { font-size: 9px; color: var(--muted); text-align: center; }
+@media (max-width: 900px) {
+  .cols, .cols.wide-left, .layout { grid-template-columns: 1fr; }
+  .sidebar { position: sticky; top: 0; z-index: 2; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px; }
+  .sidebar h1 { font-size: 16px; margin-right: 8px; }
+  .sidebar nav { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; margin: 0; flex: 1 1 100%; }
+  .sidebar nav button { padding: 8px 10px; }
+  .content { padding: 12px; }
+  .content > h1 { font-size: 1.35rem; }
+  .kpi strong { font-size: 18px; }
+  .toolbar label { flex: 1 1 140px; }
+  .toolbar label input { width: 100%; }
+  .bar-row { grid-template-columns: 42px 1fr minmax(72px, 28vw); }
+}

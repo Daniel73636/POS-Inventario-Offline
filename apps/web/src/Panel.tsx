@@ -3,7 +3,7 @@
 import { DEMO_OWNER, type Product } from '@pos/contracts';
 import { formatMoney, parseMoney, PAYMENT_METHOD_LABELS, type PaymentMethod } from '@pos/domain-pos';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, API_URL } from './api';
+import { api, API_URL, downloadCsv } from './api';
 
 type Section = 'dashboard' | 'productos' | 'inventario' | 'clientes' | 'caja' | 'dispositivos' | 'alertas';
 
@@ -111,6 +111,8 @@ interface DashboardReport {
   inventory: { negative: number; low: number };
   openAlerts: number;
   devices: { online: number; total: number };
+  byHour?: Array<{ hour: number; totalCents: number; sales: number }>;
+  lowRotation?: Array<{ productId: string; name: string; category: string; stockQty: number; soldQty: number }>;
 }
 interface SalesReport {
   days: Array<{ day: string; sales: number; totalCents: number; voided: number }>;
@@ -149,15 +151,30 @@ function Dashboard() {
   const profit = useData<ProfitReport>(`/v1/reports/profit${q}`);
   const inv = useData<InventoryReport>('/v1/reports/inventory');
   const recent = useData<SaleRow[]>(`/v1/sales${q}`);
+  const [csvError, setCsvError] = useState<string | null>(null);
   const max = Math.max(1, ...(sales.data?.days.map((d) => d.totalCents) ?? [1]));
   const d = dash.data;
+  const hourMax = Math.max(1, ...(d?.byHour?.map((h) => h.totalCents) ?? [1]));
+  async function exportCsv(kind: 'hour' | 'rotation' | 'margin') {
+    setCsvError(null);
+    const names = { hour: 'ventas-por-hora', rotation: 'baja-rotacion', margin: 'margen' };
+    try {
+      await downloadCsv(`/v1/reports/export.csv?kind=${kind}&from=${from}&to=${to}`, `${names[kind]}-${from}_${to}.csv`);
+    } catch (e) {
+      setCsvError(e instanceof Error ? e.message : String(e));
+    }
+  }
   return (
     <>
       <div className="toolbar">
         <label>Desde <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>Hasta <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
         <button onClick={() => { dash.reload(); sales.reload(); profit.reload(); inv.reload(); recent.reload(); }}>Actualizar</button>
+        <button onClick={() => exportCsv('hour')}>CSV por hora</button>
+        <button onClick={() => exportCsv('rotation')}>CSV baja rotación</button>
+        <button onClick={() => exportCsv('margin')}>CSV margen</button>
       </div>
+      {csvError && <p className="error">{csvError}</p>}
       <State error={dash.error} loading={dash.loading && !d} onRetry={dash.reload} />
       {dash.loading && d && <p className="muted small">Actualizando…</p>}
       {d && (
@@ -188,6 +205,19 @@ function Dashboard() {
             {sales.error && <State error={sales.error} loading={false} onRetry={sales.reload} />}
             {!sales.loading && sales.data?.days.length === 0 && <p className="muted">Sin ventas en el rango.</p>}
           </div>
+          <h3>Ventas por hora</h3>
+          <div className="hour-grid" aria-label="Ventas por hora">
+            {Array.from({ length: 24 }, (_, hour) => {
+              const row = d?.byHour?.find((h) => h.hour === hour);
+              const cents = row?.totalCents ?? 0;
+              return (
+                <div key={hour} className="hour" title={`${hour}:00 · ${row?.sales ?? 0} ventas`}>
+                  <div className="hour-bar" style={{ height: `${Math.max(2, (cents / hourMax) * 100)}%` }} />
+                  <span>{hour}</span>
+                </div>
+              );
+            })}
+          </div>
           <h3>Por medio de pago</h3>
           <table>
             <tbody>
@@ -215,6 +245,19 @@ function Dashboard() {
               ))}
             </tbody>
           </table>
+          {(d?.lowRotation?.length ?? 0) > 0 && (
+            <>
+              <h3>Sin ventas y con stock</h3>
+              <table>
+                <thead><tr><th>Producto</th><th className="num">Stock</th></tr></thead>
+                <tbody>
+                  {d!.lowRotation!.map((r) => (
+                    <tr key={r.productId}><td>{r.name}</td><td className="num">{r.stockQty}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
         </section>
       </div>
       <section className="card">

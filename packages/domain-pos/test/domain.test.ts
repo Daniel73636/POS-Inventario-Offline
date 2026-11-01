@@ -12,6 +12,9 @@ import {
   computeCartTotals,
   computeTaxes,
   countDenominations,
+  csvCell,
+  quotePromotion,
+  toCsv,
   divRoundHalfEven,
   emptyCart,
   finalizeSale,
@@ -340,5 +343,32 @@ describe('carrito, descuentos y venta', () => {
     const credit = finalizeSale(cart, [{ method: 'credit', amountCents: 350000 }]);
     expect(credit).toMatchObject({ ok: false });
     expect(finalizeSale(setCustomer(cart, { id: 'c1' }), [{ method: 'credit', amountCents: 350000 }]).ok).toBe(true);
+  });
+});
+
+describe('quotePromotion', () => {
+  const bogo = { id: 'dos-por-uno', kind: 'bogo' as const, productId: 'leche', buy: 2, pay: 1 };
+  const volume = { id: 'docena', kind: 'volume' as const, productId: 'leche', minQty: 12, unitPriceCents: 800 };
+
+  it('2x1 no cobra las unidades pares y el volumen baja el precio', () => {
+    expect(quotePromotion('leche', 1, 1000, [bogo])).toMatchObject({ discountCents: 0, freeQty: 0, promotionId: null });
+    expect(quotePromotion('leche', 5, 1000, [bogo])).toMatchObject({ discountCents: 2000, freeQty: 2, payableQty: 3, promotionId: 'dos-por-uno' });
+    expect(quotePromotion('leche', 12, 1000, [volume])).toMatchObject({ kind: 'volume', unitPriceCents: 800, discountCents: 2400 });
+    expect(quotePromotion('leche', 11, 1000, [volume]).discountCents).toBe(0);
+    expect(quotePromotion('leche', 12, 700, [volume]).promotionId).toBeNull();
+  });
+
+  it('si hay 2x1 y volumen, gana el mayor descuento', () => {
+    const best = quotePromotion('leche', 12, 1000, [bogo, volume]);
+    expect(best.promotionId).toBe('dos-por-uno');
+    expect(best.discountCents).toBe(6000);
+  });
+});
+
+describe('toCsv', () => {
+  it('escapa comillas y neutraliza fórmulas', () => {
+    expect(csvCell('=cmd')).toBe("'=cmd");
+    expect(csvCell('a, "b"')).toBe('"a, ""b"""');
+    expect(toCsv(['nombre', 'total'], [['Pan, tajado', 100]])).toBe('nombre,total\n"Pan, tajado",100\n');
   });
 });

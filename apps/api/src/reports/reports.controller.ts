@@ -1,5 +1,7 @@
-import { Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Inject, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { toCsv } from '@pos/domain-pos';
 import type { Database } from '@pos/db';
+import type { FastifyReply } from 'fastify';
 import { CONFIG, DB, type AppConfig } from '../config';
 import type { AuthedRequest } from '../common/http';
 import { OwnerGuard } from '../auth/guards';
@@ -92,7 +94,100 @@ export class ReportsController {
       inventory: { negative: Number(inv.negative), low: Number(inv.low) },
       openAlerts: Number(alerts.open),
       devices,
+      lowRotation: (await this.rotationRows(p)).filter((r) => r.lowRotation).slice(0, 8),
     };
+  }
+
+  private async rotationRows(p: [string, string, string, string]) {
+    const rows = await this.db.query<{ id: string; name: string; category: string; stock_qty: number; sold_qty: number; revenue_cents: number }>(
+      `SELECT pr.id, pr.name, pr.category,
+              COALESCE(sl.qty, 0) AS stock_qty,
+              COALESCE(sold.qty, 0) AS sold_qty,
+              COALESCE(sold.revenue_cents, 0) AS revenue_cents
+       FROM products pr
+       LEFT JOIN stock_levels sl ON sl.product_id = pr.id AND sl.tenant_id = pr.tenant_id
+       LEFT JOIN (
+         SELECT i.product_id, SUM(i.base_qty) AS qty, SUM(i.line_total_cents) AS revenue_cents
+         FROM sale_items i
+         JOIN sales s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id
+         WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE}
+         GROUP BY i.product_id
+       ) sold ON sold.product_id = pr.id
+       WHERE pr.tenant_id = $1 AND pr.active
+       ORDER BY COALESCE(sold.qty, 0) ASC, COALESCE(sl.qty, 0) DESC, pr.name`,
+      p,
+    );
+    return rows.map((r) => {
+      const stockQty = Number(r.stock_qty);
+      const soldQty = Number(r.sold_qty);
+      return {
+        productId: r.id,
+        name: r.name,
+        category: r.category,
+        stockQty,
+        soldQty,
+        revenueCents: Number(r.revenue_cents),
+        lowRotation: stockQty > 0 && soldQty <= 0,
+      };
+    });
+  }
+
+  /** CSV del dueño: ventas por hora, baja rotación o margen. */
+  @Get('reports/export.csv')
+  async exportCsv(
+    @Req() req: AuthedRequest,
+    @Query('kind') kind: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    const p = this.range(req, from, to);
+    const send = (filename: string, csv: string) => {
+      reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="${filename}"`)
+        .send(`\uFEFF${csv}`);
+    };
+    if (kind === 'hour') {
+      const rows = await this.db.query<{ hour: number; total_cents: number; sales: number }>(
+        `SELECT EXTRACT(HOUR FROM s.occurred_at AT TIME ZONE $4)::int AS hour, SUM(total_cents) AS total_cents, COUNT(*)::int AS sales
+         FROM sales s WHERE s.tenant_id = $1 AND s.status = 'completed' AND ${RANGE} GROUP BY 1`,
+        p,
+      );
+      const byHour = new Map(rows.map((h) => [h.hour, h]));
+      const body = toCsv(
+        ['hora', 'ventas', 'total_centavos'],
+        Array.from({ length: 24 }, (_, hour) => {
+          const row = byHour.get(hour);
+          return [hour, row?.sales ?? 0, row ? Number(row.total_cents) : 0];
+        }),
+      );
+      send(`ventas-por-hora-${p[1]}_${p[2]}.csv`, body);
+      return;
+    }
+    if (kind === 'rotation') {
+      const items = await this.rotationRows(p);
+      send(
+        `baja-rotacion-${p[1]}_${p[2]}.csv`,
+        toCsv(
+          ['producto', 'categoria', 'stock', 'unidades_vendidas', 'ingreso_centavos', 'baja_rotacion'],
+          items.map((r) => [r.name, r.category, r.stockQty, r.soldQty, r.revenueCents, r.lowRotation ? 'si' : 'no']),
+        ),
+      );
+      return;
+    }
+    if (kind === 'margin') {
+      const report = await this.profit(req, from, to);
+      send(
+        `margen-${p[1]}_${p[2]}.csv`,
+        toCsv(
+          ['producto', 'unidades', 'ingreso_centavos', 'costo_centavos', 'utilidad_centavos', 'margen_bp', 'bajo_costo'],
+          report.products.map((r) => [r.name, r.qty, r.revenueCents, r.costCents, r.profitCents, r.marginBp, r.belowCost ? 'si' : 'no']),
+        ),
+      );
+      return;
+    }
+    reply.status(400).send({ statusCode: 400, code: 'solicitud_invalida', message: 'El parámetro kind debe ser hour, rotation o margin' });
   }
 
   @Get('reports/sales')

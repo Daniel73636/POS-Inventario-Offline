@@ -50,7 +50,7 @@ export async function seedDemo(db: Database, opts: { historicalSales?: boolean }
       hashPassword(DEMO_OWNER.password),
     ]);
     for (const u of DEMO_USERS) {
-      await q.query('INSERT INTO users (id, tenant_id, name, role, pin_hash) VALUES ($1,$2,$3,$4,$5)', [u.id, t, u.name, u.role, hashPin(t, u.pin)]);
+      await q.query('INSERT INTO users (id, tenant_id, name, role, pin_hash) VALUES ($1,$2,$3,$4,$5)', [u.id, t, u.name, u.role, await hashPin(t, u.pin)]);
     }
     for (const pl of DEMO_PRICE_LISTS) {
       await q.query('INSERT INTO price_lists (tenant_id, id, name) VALUES ($1,$2,$3)', [t, pl.id, pl.name]);

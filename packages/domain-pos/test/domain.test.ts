@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   addToCart,
   allocateLots,
+  allocateSaleLine,
+  daysUntil,
+  saleLotWarnings,
   allocateProportionally,
   applyDiscount,
   averageCost,
@@ -9,6 +12,9 @@ import {
   computeCartTotals,
   computeTaxes,
   countDenominations,
+  csvCell,
+  quotePromotion,
+  toCsv,
   divRoundHalfEven,
   emptyCart,
   finalizeSale,
@@ -20,6 +26,7 @@ import {
   quickCashOptions,
   removeLine,
   setCustomer,
+  setLinePromotion,
   setLineQty,
   splitPayments,
   splitTax,
@@ -155,6 +162,22 @@ describe('allocateLots (FEFO)', () => {
     expect(r.allocations.map((a) => a.lotId)).toEqual(['b', 'a', 'd']);
     expect(r.shortfall).toBe(5);
     expect(r.blockedLotIds).toEqual(['c']);
+  });
+
+  it('la venta avisa lote vencido, faltante y próximo a vencer', () => {
+    expect(daysUntil('2026-11-08', '2026-11-01')).toBe(7);
+    expect(daysUntil('2026-10-01', '2026-11-01')).toBe(-31);
+    const alloc = allocateSaleLine(8, lots, '2026-11-01');
+    expect(alloc.blockedLotIds).toEqual(['c']);
+    expect(alloc.lots.map((l) => l.lotId)).toEqual(['b']);
+    expect(alloc.shortfall).toBe(0);
+    const warnings = saleLotWarnings('Leche', alloc, '2026-11-01');
+    expect(warnings.some((w) => w.includes('vencido'))).toBe(true);
+    const soon = allocateSaleLine(1, lots, '2026-11-10');
+    expect(saleLotWarnings('Leche', soon, '2026-11-10').some((w) => w.includes('2026-11-15'))).toBe(true);
+    const empty = allocateSaleLine(2, [], '2026-11-01');
+    expect(empty.lots).toEqual([]);
+    expect(empty.shortfall).toBe(2);
   });
 });
 
@@ -321,5 +344,45 @@ describe('carrito, descuentos y venta', () => {
     const credit = finalizeSale(cart, [{ method: 'credit', amountCents: 350000 }]);
     expect(credit).toMatchObject({ ok: false });
     expect(finalizeSale(setCustomer(cart, { id: 'c1' }), [{ method: 'credit', amountCents: 350000 }]).ok).toBe(true);
+  });
+});
+
+describe('quotePromotion', () => {
+  const bogo = { id: 'dos-por-uno', kind: 'bogo' as const, productId: 'leche', buy: 2, pay: 1 };
+  const volume = { id: 'docena', kind: 'volume' as const, productId: 'leche', minQty: 12, unitPriceCents: 800 };
+
+  it('2x1 no cobra las unidades pares y el volumen baja el precio', () => {
+    expect(quotePromotion('leche', 1, 1000, [bogo])).toMatchObject({ discountCents: 0, freeQty: 0, promotionId: null });
+    expect(quotePromotion('leche', 5, 1000, [bogo])).toMatchObject({ discountCents: 2000, freeQty: 2, payableQty: 3, promotionId: 'dos-por-uno' });
+    expect(quotePromotion('leche', 12, 1000, [volume])).toMatchObject({ kind: 'volume', unitPriceCents: 800, discountCents: 2400 });
+    expect(quotePromotion('leche', 11, 1000, [volume]).discountCents).toBe(0);
+    expect(quotePromotion('leche', 12, 700, [volume]).promotionId).toBeNull();
+  });
+
+  it('si hay 2x1 y volumen, gana el mayor descuento', () => {
+    const best = quotePromotion('leche', 12, 1000, [bogo, volume]);
+    expect(best.promotionId).toBe('dos-por-uno');
+    expect(best.discountCents).toBe(6000);
+  });
+
+  it('en el carrito el 2x1 sólo aplica si la línea lo tiene elegido', () => {
+    const plain = addToCart(emptyCart(), gaseosa, 2);
+    expect(computeCartTotals(plain).discountCents).toBe(0);
+    const lineId = plain.lines[0].lineId;
+    const promo = setLinePromotion(plain, lineId, { id: '2x1', kind: 'bogo', productId: 'p-gaseosa', buy: 2, pay: 1 });
+    const t = computeCartTotals(promo);
+    expect(t.discountCents).toBe(350000);
+    expect(t.totalCents).toBe(350000);
+    const single = setLinePromotion(addToCart(emptyCart(), gaseosa, 1), lineId, { id: '2x1', kind: 'bogo', productId: 'p-gaseosa', buy: 2, pay: 1 });
+    expect(computeCartTotals(single).discountCents).toBe(0);
+    expect(setLinePromotion(promo, lineId, null).lines[0].promotion).toBeNull();
+  });
+});
+
+describe('toCsv', () => {
+  it('escapa comillas y neutraliza fórmulas', () => {
+    expect(csvCell('=cmd')).toBe("'=cmd");
+    expect(csvCell('a, "b"')).toBe('"a, ""b"""');
+    expect(toCsv(['nombre', 'total'], [['Pan, tajado', 100]])).toBe('nombre,total\n"Pan, tajado",100\n');
   });
 });

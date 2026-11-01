@@ -3,20 +3,31 @@
   "version": "0.1.0",
   "private": true,
   "main": "index.js",
+  "description": "App Android (Expo) del POS: venta móvil, escaneo, consulta de precios y tablero del día",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "web": "expo start --web"
+    "build:apk": "eas build -p android --profile preview",
+    "export": "expo export --platform android --output-dir dist",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pos/contracts": "workspace:*",
     "@pos/domain-pos": "workspace:*",
-    "expo": "~52.0.0",
-    "expo-status-bar": "~2.0.0",
-    "react": "18.3.1",
-    "react-native": "0.76.3"
+    "@pos/sync-engine": "workspace:*",
+    "expo": "~54.0.38",
+    "expo-camera": "~17.0.10",
+    "expo-crypto": "~15.0.9",
+    "expo-haptics": "~15.0.8",
+    "expo-sqlite": "~16.0.10",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0"
   },
   "devDependencies": {
-    "@types/react": "~18.3.12",
+    "@babel/core": "^7.26.0",
+    "@types/react": "~19.1.0",
     "typescript": "~5.8.3"
   }
 }

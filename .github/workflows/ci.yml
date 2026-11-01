@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [feat/mejora-produccion-ux, main]
+
+concurrency:
+  group: ci-pos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  monorepo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Compilar paquetes
+        run: pnpm build:packages
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Pruebas
+        run: pnpm test
+      - name: Build de las apps web
+        run: pnpm --filter @pos/pos-web --filter @pos/web build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_DEMO_MODE: 'false'
+      - name: Auditoría de dependencias (informativa)
+        run: pnpm audit --prod
+        continue-on-error: true

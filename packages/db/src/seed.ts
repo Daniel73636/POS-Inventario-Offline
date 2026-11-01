@@ -10,7 +10,7 @@ import {
   type EventPayload,
   type EventType,
 } from '@pos/contracts';
-import { addToCart, computeCartTotals, emptyCart, finalizeSale, type CartProduct } from '@pos/domain-pos';
+import { addToCart, allocateSaleLine, computeCartTotals, emptyCart, finalizeSale, type Lot } from '@pos/domain-pos';
 import { EventFactory, HybridLogicalClock, uuidv7 } from '@pos/sync-engine';
 import type { Database } from './adapter';
 import { emitServerEvents, ingestEvents, serverDeviceId } from './ingest';
@@ -50,7 +50,7 @@ export async function seedDemo(db: Database, opts: { historicalSales?: boolean }
       hashPassword(DEMO_OWNER.password),
     ]);
     for (const u of DEMO_USERS) {
-      await q.query('INSERT INTO users (id, tenant_id, name, role, pin_hash) VALUES ($1,$2,$3,$4,$5)', [u.id, t, u.name, u.role, hashPin(t, u.pin)]);
+      await q.query('INSERT INTO users (id, tenant_id, name, role, pin_hash) VALUES ($1,$2,$3,$4,$5)', [u.id, t, u.name, u.role, await hashPin(t, u.pin)]);
     }
     for (const pl of DEMO_PRICE_LISTS) {
       await q.query('INSERT INTO price_lists (tenant_id, id, name) VALUES ($1,$2,$3)', [t, pl.id, pl.name]);
@@ -83,12 +83,18 @@ export async function seedDemo(db: Database, opts: { historicalSales?: boolean }
   await emitServerEvents(db, t, items);
 
   let historical = 0;
-  if (opts.historicalSales !== false) historical = await seedHistory(db, catalog.map((r) => r.product));
+  if (opts.historicalSales !== false) historical = await seedHistory(db, catalog);
   return { created: true, products: catalog.length, historicalSales: historical };
 }
 
 /** Ventas de los últimos 7 días desde una caja "histórica" para que el panel tenga datos. */
-async function seedHistory(db: Database, products: CartProduct[]): Promise<number> {
+async function seedHistory(db: Database, catalog: ReturnType<typeof demoCatalog>): Promise<number> {
+  const products = catalog.map((r) => r.product);
+  const lotsByProduct = new Map<string, Lot[]>();
+  for (const row of catalog) {
+    if (!row.expiresOn || !row.product.tracksLots) continue;
+    lotsByProduct.set(row.product.id, [{ id: `L-${row.product.sku}`, qty: row.initialStock, expiresOn: row.expiresOn }]);
+  }
   const t = DEMO_TENANT.id;
   const deviceId = 'dev_historico';
   await db.query(
@@ -129,12 +135,23 @@ async function seedHistory(db: Database, products: CartProduct[]): Promise<numbe
       const total = computeCartTotals(cart).totalCents;
       const fin = finalizeSale(cart, [{ method, amountCents: total }]);
       if (!fin.ok) continue;
+      const today = new Date(at).toISOString().slice(0, 10);
+      const items = fin.sale.items.map((item) => {
+        const known = lotsByProduct.get(item.productId);
+        if (!known) return item;
+        const alloc = allocateSaleLine(item.baseQty, known, today);
+        for (const lot of alloc.lots) {
+          const row = known.find((l) => l.id === lot.lotId);
+          if (row) row.qty -= lot.qty;
+        }
+        return alloc.lots.length ? { ...item, lots: alloc.lots } : item;
+      });
       saleNo += 1;
       if (method === 'cash') cashSales += total;
       events.push(
         factory.create(
           'SaleCompleted',
-          { saleId: uuidv7(at), localNumber: saleNo, cashSessionId: sessionId, userId: 'usr_ana', ...fin.sale, items: fin.sale.items, payments: fin.sale.payments },
+          { saleId: uuidv7(at), localNumber: saleNo, cashSessionId: sessionId, userId: 'usr_ana', ...fin.sale, items, payments: fin.sale.payments },
           new Date(at),
         ),
       );

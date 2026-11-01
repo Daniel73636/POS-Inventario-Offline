@@ -2,19 +2,36 @@
   "name": "@pos/api",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
+  "description": "API central y servidor de sincronización (NestJS + Fastify)",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rimraf dist"
   },
   "dependencies": {
-    "@fastify/cors": "^10.1.0",
-    "fastify": "^5.4.0"
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-fastify": "^11.1.6",
+    "@pos/contracts": "workspace:*",
+    "@pos/db": "workspace:*",
+    "@pos/domain-pos": "workspace:*",
+    "@pos/sync-engine": "workspace:*",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@nestjs/cli": "^11.0.10",
+    "@swc/core": "^1.13.5",
     "@types/node": "^22.15.0",
-    "tsx": "^4.20.3",
-    "typescript": "~5.8.3"
+    "rimraf": "^6.0.1",
+    "tsx": "^4.23.15",
+    "typescript": "~5.8.3",
+    "unplugin-swc": "^1.5.7",
+    "vitest": "^3.2.4"
   }
 }

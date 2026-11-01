@@ -12,6 +12,17 @@ Cada caja escribe primero en su base local un registro de **eventos inmutables**
 | Panel del dueño | `apps/web` | Next.js 15 | 3000 |
 | API central y sincronización | `apps/api` | NestJS 11 + Fastify + PostgreSQL (o PGlite embebido) | 4000 |
 
+## Documentos
+
+| Documento | Para qué |
+|---|---|
+| [docs/CHECKLIST_LANZAMIENTO.md](docs/CHECKLIST_LANZAMIENTO.md) | Pasos manuales antes del primer local (entorno, respaldo, vinculación, DIAN) |
+| [docs/CHANGELOG_MEJORAS.md](docs/CHANGELOG_MEJORAS.md) | Qué cambió en las fases 1 a 4 |
+| [docs/SYNC.md](docs/SYNC.md) | Conflictos, lotes, reintentos y revocación |
+| [docs/FACTURACION_DIAN.md](docs/FACTURACION_DIAN.md) | Simulador sin validez legal y lo que falta para un proveedor real |
+| [docs/AUDITORIA.md](docs/AUDITORIA.md) | Hallazgos P0/P1/P2 y el plan de endurecimiento |
+| [docs/DECISIONES.md](docs/DECISIONES.md) | Decisiones de PIN, tenants, auditoría y almacenamiento |
+
 ## Estructura
 
 ```
@@ -61,7 +72,7 @@ DATABASE_URL=postgres://pos:pos@localhost:5432/pos pnpm dev:api     # PowerShell
 Sólo existen con `DEMO_MODE=true` (por defecto fuera de `NODE_ENV=production`). En producción la API no
 siembra la tienda demo, rechaza `DEMO-2026` y exige códigos de un solo uso con vencimiento; además
 valida el entorno al arrancar (`JWT_SECRET` ≥ 32 caracteres, `DATABASE_URL`, `CORS_ORIGINS` explícito).
-Ver `docs/AUDITORIA.md`, `docs/SYNC.md`, `docs/FACTURACION_DIAN.md` y `docs/DECISIONES.md`.
+Ver la sección [Documentos](#documentos).
 
 | Qué | Valor |
 |---|---|
@@ -168,7 +179,7 @@ equipo se desfasa más de 5 minutos.
 
 Funciones puras: `priceLine` (presentación, volumen, lista, vigencia), `applyDiscount` (límites por rol),
 `computeTaxes` (IVA incluido/excluido, INC, exentos; redondeo por línea o por total), `allocateLots`
-(FEFO, bloquea vencidos), `averageCost`, `cashExpected`, `splitPayments` (pago mixto y cambio),
+(FEFO, bloquea vencidos), `quotePromotion` (2x1 y volumen; en la caja el 2x1 entra sólo si se elige en la línea), `averageCost`, `cashExpected`, `splitPayments` (pago mixto y cambio),
 `profitOfSale`, más carrito (`addToCart`, `computeCartTotals`, `finalizeSale`).
 **Dinero siempre en centavos enteros**; multiplicaciones por cantidades decimales (kg) en milésimas
 con `BigInt` y **redondeo bancario**; nunca `float` para dinero.
@@ -177,7 +188,7 @@ con `BigInt` y **redondeo bancario**; nunca `float` para dinero.
 
 ```bash
 pnpm test                                    # todo el monorepo (turbo)
-pnpm --filter @pos/domain-pos test           # 24 pruebas de dominio con casos numéricos conocidos
+pnpm --filter @pos/domain-pos test           # dominio: dinero, impuestos, FEFO, 2x1 y caja
 pnpm --filter @pos/sync-engine test          # 45: HLC, UUIDv7, idempotencia, última unidad, LWW y
                                              #     simulación determinista de 5 cajas × 40 semillas con
                                              #     desconexiones, respuestas perdidas y duplicados
@@ -185,7 +196,7 @@ pnpm --filter @pos/api test                  # e2e de la API sobre PGlite en mem
 pnpm --filter @pos/pos-web test              # base local IndexedDB (fake-indexeddb) y bloqueo de PIN
 ```
 
-Resultado actual: **109 pruebas en verde** (domain 24, sync 45, contracts 9, db 3, pos-web 8, API e2e 20).
+Resultado actual: **116 pruebas en verde** (domain 29, sync 47, contracts 9, db 3, pos-web 8, API e2e 20).
 
 Salud de la API: `GET /health` (proceso vivo) y `GET /ready` (base accesible y migraciones al día).
 Errores: `{ statusCode, code, message, details? }` en español.

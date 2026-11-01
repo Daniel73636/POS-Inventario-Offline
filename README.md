@@ -7,7 +7,7 @@ Cada caja escribe primero en su base local un registro de **eventos inmutables**
 
 | Superficie | App | Tecnología | Puerto |
 |---|---|---|---|
-| Caja PC (navegador / PWA) | `apps/pos-web` | Next.js 15 (100 % cliente) + base local en `localStorage` + service worker | 3001 |
+| Caja PC (navegador / PWA) | `apps/pos-web` | Next.js 15 (100 % cliente) + base local IndexedDB (Dexie) + service worker | 3001 |
 | App Android | `apps/pos-android` | Expo SDK 54 (React Native 0.81) + `expo-sqlite` + `expo-camera` | Metro |
 | Panel del dueño | `apps/web` | Next.js 15 | 3000 |
 | API central y sincronización | `apps/api` | NestJS 11 + Fastify + PostgreSQL (o PGlite embebido) | 4000 |
@@ -57,6 +57,11 @@ DATABASE_URL=postgres://pos:pos@localhost:5432/pos pnpm dev:api     # PowerShell
 ```
 
 ### Credenciales demo (seed "MiniMarket Demo")
+
+Sólo existen con `DEMO_MODE=true` (por defecto fuera de `NODE_ENV=production`). En producción la API no
+siembra la tienda demo, rechaza `DEMO-2026` y exige códigos de un solo uso con vencimiento; además
+valida el entorno al arrancar (`JWT_SECRET` ≥ 32 caracteres, `DATABASE_URL`, `CORS_ORIGINS` explícito).
+Ver `docs/AUDITORIA.md`, `docs/SYNC.md`, `docs/FACTURACION_DIAN.md` y `docs/DECISIONES.md`.
 
 | Qué | Valor |
 |---|---|
@@ -176,17 +181,21 @@ pnpm --filter @pos/domain-pos test           # 24 pruebas de dominio con casos n
 pnpm --filter @pos/sync-engine test          # 45: HLC, UUIDv7, idempotencia, última unidad, LWW y
                                              #     simulación determinista de 5 cajas × 40 semillas con
                                              #     desconexiones, respuestas perdidas y duplicados
-pnpm --filter @pos/api test                  # e2e de la API sobre PGlite en memoria
+pnpm --filter @pos/api test                  # e2e de la API sobre PGlite en memoria (incluye aislamiento entre tenants)
+pnpm --filter @pos/pos-web test              # base local IndexedDB (fake-indexeddb) y bloqueo de PIN
 ```
 
-Resultado actual: **79 pruebas en verde** (domain 24, sync 45, contracts 3, db 3, API e2e 4).
+Resultado actual: **109 pruebas en verde** (domain 24, sync 45, contracts 9, db 3, pos-web 8, API e2e 20).
+
+Salud de la API: `GET /health` (proceso vivo) y `GET /ready` (base accesible y migraciones al día).
+Errores: `{ statusCode, code, message, details? }` en español.
 
 ## Limitaciones conocidas (MVP)
 
-- La caja PC usa `localStorage` (≈5 MB; suficiente para miles de ventas). Para producción: Tauri + SQLite/SQLCipher o IndexedDB.
-- Sin cifrado de la base local ni encadenamiento por hash del registro de auditoría.
+- La caja PC guarda en IndexedDB con almacenamiento persistente y respaldo JSON (Ajustes → Base local y respaldo). Para escritorio: Tauri + SQLite/SQLCipher.
+- Sin cifrado de la base local. El registro de auditoría del servidor (`audit_log`) es sólo-inserción y encadenado por hash.
 - Impresión: ticket por el diálogo del navegador (`window.print`); sin ESC/POS, cajón ni balanza.
-- Fiscal: sólo reserva de rangos (stub); sin proveedor de facturación electrónica ni notas crédito.
+- Fiscal: interfaz `FacturacionProvider` con simulador **sin validez legal**; sin proveedor DIAN real ni notas crédito (ver `docs/FACTURACION_DIAN.md`).
 - Android: un usuario vendedor fijo (sin PIN), turno abierto automáticamente con base 0, sin conteo físico ni impresión Bluetooth; sincroniza mientras la app está abierta (sin WorkManager).
 - El costo promedio se recalcula en cada dispositivo al recibir entradas; puede diferir levemente entre cajas hasta el próximo snapshot (el servidor es la referencia en reportes).
 - Sin licenciamiento, borrado remoto de la base local ni Sentry.

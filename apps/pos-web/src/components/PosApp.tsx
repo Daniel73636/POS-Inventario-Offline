@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { PosProvider, usePos } from '@/lib/pos-context';
 import { CashScreen, InventoryScreen, SalesScreen, SettingsScreen } from './BackOffice';
 import { SaleScreen } from './SaleScreen';
+import { isHelpKey, ShortcutsHelp } from './ShortcutsHelp';
 import { LoginScreen, OpenSessionScreen, SetupScreen } from './Setup';
 
 type Tab = 'venta' | 'inventario' | 'caja' | 'ventas' | 'ajustes';
@@ -53,6 +54,7 @@ function Shell() {
   const { config, user, db, logout, online, sync } = usePos();
   const [tab, setTab] = useState<Tab>('venta');
   const [dark, setDark] = useState(false);
+  const [help, setHelp] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('pos:theme') === 'dark';
@@ -68,6 +70,9 @@ function Shell() {
       if (e.altKey && /^[1-5]$/.test(e.key)) {
         e.preventDefault();
         setTab(TABS[Number(e.key) - 1].id);
+      } else if (isHelpKey(e)) {
+        e.preventDefault();
+        setHelp(true);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -89,8 +94,10 @@ function Shell() {
           </button>
         ))}
         <span className="spacer" />
+        <button className="ghost" onClick={() => setHelp(true)} aria-label="Atajos de teclado" title="Atajos de teclado (? o F1)">?</button>
         <button className="ghost" onClick={() => setDark((d) => !d)} aria-label="Cambiar tema">{dark ? '☀' : '☾'}</button>
       </nav>
+      {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
       <main className="main">
         {tab === 'venta' && <SaleScreen />}
         {tab === 'inventario' && <InventoryScreen />}

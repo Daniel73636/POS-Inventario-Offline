@@ -142,6 +142,9 @@ class MobileStore implements SyncStore {
       products: rows.map((r) => r.product),
       customers: DEMO_CUSTOMERS,
       stock: rows.map((r) => ({ productId: r.product.id, qty: r.initialStock })),
+      lots: rows
+        .filter((r) => r.expiresOn && r.product.tracksLots)
+        .map((r) => ({ productId: r.product.id, lotId: `L-${r.product.sku}`, qty: r.initialStock, expiresOn: r.expiresOn })),
     });
     this.bootstrap(
       { mode: 'demo', apiUrl: null, deviceId: `and-demo-${uuidv7().slice(-12)}`, deviceToken: null, tenantId: DEMO_TENANT.id, tenantName: DEMO_TENANT.name, storeId: DEMO_STORE.id, storeName: DEMO_STORE.name, userId: 'usr_ana' },

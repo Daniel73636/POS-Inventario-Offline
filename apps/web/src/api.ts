@@ -36,3 +36,24 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   return (await res.json()) as T;
 }
+
+/** Descarga un CSV autenticado. El nombre lo sugiere el servidor; `filename` es el respaldo local. */
+export async function downloadCsv(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string };
+    if (res.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('panel:token');
+      window.dispatchEvent(new Event('panel:logout'));
+    }
+    throw new ApiError(res.status, body.message || `Error ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

@@ -6,3 +6,5 @@ export * from './payments';
 export * from './cash';
 export * from './cart';
 export * from './sale';
+export * from './promotions';
+export * from './csv';

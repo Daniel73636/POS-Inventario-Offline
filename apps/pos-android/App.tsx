@@ -19,6 +19,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { backgroundSyncJob } from './src/background-sync';
 import { Scanner } from './src/Scanner';
 import { store } from './src/store';
 
@@ -39,21 +40,32 @@ type Tab = 'venta' | 'precio' | 'tablero' | 'ajustes';
 function SyncBadge() {
   const s = useStore();
   const { sync, config } = s;
-  const label =
-    config?.mode === 'demo'
-      ? 'Demo local'
-      : sync.state === 'offline'
-        ? `Sin conexión${sync.pending ? ` · ${sync.pending}` : ''}`
-        : sync.pending > 0
-          ? `Pendiente (${sync.pending})`
-          : sync.state === 'revoked'
-            ? 'Revocado'
-            : 'Sincronizado';
-  const color = config?.mode === 'demo' ? '#64748b' : sync.state === 'offline' || sync.state === 'revoked' ? '#dc2626' : sync.pending ? '#d97706' : '#16a34a';
+  const demo = !config || config.mode === 'demo';
+  const label = demo
+    ? 'Demo local'
+    : sync.state === 'revoked'
+      ? 'Revocado'
+      : sync.state === 'syncing'
+        ? `Sincronizando${sync.pending ? ` (${sync.pending})` : '…'}`
+        : sync.state === 'error'
+          ? `Error · ${sync.pending} pend.`
+          : sync.state === 'offline'
+            ? `Sin conexión · ${sync.pending}`
+            : sync.pending > 0
+              ? `Pendiente (${sync.pending})`
+              : 'Sincronizado';
+  const color = demo
+    ? '#64748b'
+    : sync.state === 'offline' || sync.state === 'revoked' || sync.state === 'error'
+      ? '#dc2626'
+      : sync.state === 'syncing' || sync.pending
+        ? '#d97706'
+        : '#16a34a';
+  const when = sync.lastSyncAt ? new Date(sync.lastSyncAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : null;
   return (
-    <Pressable onPress={() => s.syncNow()} style={[styles.badge, { borderColor: color }]}>
+    <Pressable onPress={() => s.syncNow()} style={[styles.badge, { borderColor: color }]} accessibilityLabel={sync.lastError ?? label}>
       <View style={[styles.dot, { backgroundColor: color }]} />
-      <Text style={{ color, fontWeight: '600' }}>{label}</Text>
+      <Text style={{ color, fontWeight: '600' }}>{label}{when && !demo ? ` · ${when}` : ''}</Text>
     </Pressable>
   );
 }
@@ -260,8 +272,11 @@ function SettingsScreen() {
           <Text style={styles.h2}>{s.config.storeName}</Text>
           <Text>Modo: {s.config.mode === 'server' ? `servidor (${s.config.apiUrl})` : 'demo local'}</Text>
           <Text style={styles.muted}>Dispositivo {s.config.deviceId}</Text>
+          <Text>Estado: {s.sync.state} · pendientes {s.sync.pending}</Text>
           <Text>Última sincronización: {s.sync.lastSyncAt ? new Date(s.sync.lastSyncAt).toLocaleString('es-CO') : '—'}</Text>
+          {s.sync.clockWarning && <Text style={{ color: '#d97706' }}>El reloj del teléfono está desfasado. Revísalo antes de vender.</Text>}
           {s.sync.lastError && <Text style={{ color: '#dc2626' }}>{s.sync.lastError}</Text>}
+          <Text style={styles.muted}>{backgroundSyncJob().note} Intervalo previsto: {backgroundSyncJob().intervalMinutes} min con red.</Text>
           <Pressable style={styles.secondary} onPress={() => s.syncNow()}><Text>Sincronizar ahora</Text></Pressable>
         </View>
       )}

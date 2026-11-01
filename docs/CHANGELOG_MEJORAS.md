@@ -27,10 +27,19 @@ Hecha antes de esta entrega. Detalle en `docs/AUDITORIA.md` y `docs/DECISIONES.m
 - **Ticket térmico en el navegador.** La última venta se imprime a **58 mm** o **80 mm** (`window.print`, `@page`). El ancho se guarda en la caja y en Ajustes. Sigue siendo el diálogo del navegador: no hay ESC/POS ni apertura de cajón.
 - **Panel del dueño.** Cada sección distingue carga, error con reintento y lista vacía. Al actualizar se conserva el dato anterior y se indica que está actualizando.
 
-## Pendiente (no entra en esta entrega)
+## Fase 3 — reportes y crecimiento
+
+- **CSV del dueño.** `GET /v1/reports/export.csv?kind=hour|rotation|margin` descarga ventas por hora (24 filas), productos con stock y sin ventas en el rango, y margen por producto (centavos). El tablero muestra la hora y la lista corta de baja rotación, con botones de descarga.
+- **Panel en el teléfono.** Por debajo de 900 px la navegación queda fija arriba, en fila, y las tablas siguen pudiendo desplazarse.
+- **Promociones (esqueleto).** `quotePromotion` calcula 2x1 (`buy`/`pay`) y precio por volumen, y se queda con el mayor descuento. **No entra en el carrito ni en el evento de venta.** El precio por volumen de lista sigue en `priceLine`.
+- **Android.** El indicador distingue sincronizando, error, sin conexión y la hora del último intento. El modo demo ahora carga lotes. `background-sync.ts` describe el `WorkManager` de 15 min; el proceso nativo no está enlazado, así que sólo sincroniza con la app abierta.
+- **Checklist.** `docs/CHECKLIST_LANZAMIENTO.md`.
+
+## Pendiente
 
 - Comandos ESC/POS, cajón monedero y balanza.
-- El conteo físico y los ajustes de inventario no eligen lote; sólo la entrada con código y vencimiento, y la venta, mueven lotes.
-- Android asigna lotes al vender, pero no imprime ni hace arqueo. Sigue sin sincronización en segundo plano (WorkManager).
+- El conteo físico y los ajustes de inventario no eligen lote.
+- Android no imprime ni hace arqueo. WorkManager sigue sin módulo nativo.
+- `quotePromotion` no está cableado a la venta.
 - Sesión del dueño no revocable, base local sin cifrar y sin telemetría de errores (Sentry).
-- Una caja ya instalada en modo demo no tiene lotes hasta que se vuelve a configurar: el catálogo demo nuevo sí los incluye en el snapshot.
+- Una caja ya instalada en modo demo no tiene lotes hasta que se vuelve a configurar.

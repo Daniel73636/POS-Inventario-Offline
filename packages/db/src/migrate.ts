@@ -213,6 +213,67 @@ CREATE TABLE fiscal_ranges (
 );
 `,
   },
+  {
+    version: 2,
+    name: 'aislamiento_tenant_y_auditoria',
+    // Los ids de proyecciones los generan los clientes: la PK debe incluir tenant_id
+    // para que un dispositivo de otra empresa no pueda pisar filas ajenas.
+    sql: `
+ALTER TABLE sale_items DROP CONSTRAINT IF EXISTS sale_items_sale_id_fkey;
+ALTER TABLE sale_payments DROP CONSTRAINT IF EXISTS sale_payments_sale_id_fkey;
+
+ALTER TABLE sale_items ADD COLUMN tenant_id TEXT;
+UPDATE sale_items i SET tenant_id = s.tenant_id FROM sales s WHERE s.id = i.sale_id;
+ALTER TABLE sale_items ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE sale_payments ADD COLUMN tenant_id TEXT;
+UPDATE sale_payments p SET tenant_id = s.tenant_id FROM sales s WHERE s.id = p.sale_id;
+ALTER TABLE sale_payments ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE cash_movements ADD COLUMN tenant_id TEXT;
+UPDATE cash_movements m SET tenant_id = e.tenant_id FROM events e WHERE e.type = 'CashMovement' AND e.payload->>'movementId' = m.id;
+ALTER TABLE cash_movements ALTER COLUMN tenant_id SET NOT NULL;
+
+ALTER TABLE products DROP CONSTRAINT products_pkey;
+ALTER TABLE products ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE customers DROP CONSTRAINT customers_pkey;
+ALTER TABLE customers ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE sales DROP CONSTRAINT sales_pkey;
+ALTER TABLE sales ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE sale_items DROP CONSTRAINT sale_items_pkey;
+ALTER TABLE sale_items ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE sale_items ADD FOREIGN KEY (tenant_id, sale_id) REFERENCES sales (tenant_id, id);
+ALTER TABLE sale_payments DROP CONSTRAINT sale_payments_pkey;
+ALTER TABLE sale_payments ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE sale_payments ADD FOREIGN KEY (tenant_id, sale_id) REFERENCES sales (tenant_id, id);
+ALTER TABLE cash_sessions DROP CONSTRAINT cash_sessions_pkey;
+ALTER TABLE cash_sessions ADD PRIMARY KEY (tenant_id, id);
+ALTER TABLE cash_movements DROP CONSTRAINT cash_movements_pkey;
+ALTER TABLE cash_movements ADD PRIMARY KEY (tenant_id, id);
+CREATE INDEX sale_items_sale ON sale_items (tenant_id, sale_id);
+CREATE INDEX sale_payments_sale ON sale_payments (tenant_id, sale_id);
+
+-- Registro de auditoría: sólo inserción, encadenado por hash por tenant.
+CREATE TABLE audit_log (
+  seq BIGSERIAL PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  occurred_at TIMESTAMPTZ NOT NULL,
+  action TEXT NOT NULL,
+  actor_user_id TEXT,
+  authorized_by TEXT,
+  device_id TEXT,
+  event_id TEXT,
+  ref_id TEXT,
+  data JSONB NOT NULL,
+  prev_hash TEXT NOT NULL,
+  hash TEXT NOT NULL
+);
+CREATE INDEX audit_log_tenant ON audit_log (tenant_id, seq);
+CREATE UNIQUE INDEX audit_log_event_action ON audit_log (event_id, action);
+CREATE FUNCTION audit_log_inmutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit_log es de solo insercion'; END $$;
+CREATE TRIGGER audit_log_sin_cambios BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_log_inmutable();
+CREATE TRIGGER audit_log_sin_truncate BEFORE TRUNCATE ON audit_log FOR EACH STATEMENT EXECUTE FUNCTION audit_log_inmutable();
+`,
+  },
 ];
 
 export async function migrate(db: Database): Promise<number[]> {
